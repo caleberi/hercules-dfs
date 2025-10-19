@@ -30,7 +30,7 @@ func setupChunkServer(t *testing.T, root, address, masterAddress string) *chunks
 	assert.NotEmpty(t, address)
 	assert.NotEmpty(t, masterAddress)
 
-	server, err := chunkserver.NewChunkServer(common.ServerAddr(address), common.ServerAddr(masterAddress), root)
+	server, err := chunkserver.NewChunkServer(common.ServerAddr(address), common.ServerAddr(masterAddress), common.ServerAddr("localhost:6379"), root)
 	require.NoError(t, err)
 	return server
 }
