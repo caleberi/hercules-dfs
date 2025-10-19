@@ -26,6 +26,7 @@ func setupChunkServer(
 	server, err := NewChunkServer(
 		common.ServerAddr(address),
 		common.ServerAddr(masterAddress),
+		common.ServerAddr("localhost:6379"),
 		root)
 	require.NoError(t, err)
 	assert.False(t, server.isDead)

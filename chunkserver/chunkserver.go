@@ -122,7 +122,7 @@ type PersistedMetaData struct {
 // Returns:
 //   - *Server: A pointer to the initialized ChunkServer instance.
 //   - error: An error if any step in the initialization process fails, otherwise nil.
-func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, root string) (*ChunkServer, error) {
+func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, redisAddr common.ServerAddr, root string) (*ChunkServer, error) {
 	log.Info().Msg(fmt.Sprintf("Starting ChunkServer = %s to communicate with @%v", serverAddr, masterAddr))
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -140,7 +140,7 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 
 	failureDetector, err := failuredetector.NewFailureDetector(
 		string(masterAddr), 1000,
-		&redis.Options{Addr: "localhost:6379"},
+		&redis.Options{Addr: string(redisAddr)},
 		common.FailureDetectorKeyExipiryTime,
 		failuredetector.SuspicionLevel{
 			AccruementThreshold: 7,
@@ -1536,7 +1536,10 @@ func (cs *ChunkServer) readChunk(handle common.ChunkHandle, offset common.Offset
 // calculations (e.g., in heartBeat). It uses a context with a timeout to prevent hanging and sanitizes the
 // master address to avoid command injection. If the ping or RTT extraction fails, it logs the error and
 // returns an error to the caller. The function is not thread-safe and relies on system commands, which may
-// not be portable.
+// not be portable.For Docker environments, it extracts the host from masterAddr (e.g., "master:9090" -> "master").
+// Returns average RTT in milliseconds as float64, or 0.0 on failure with error.
+// Assumes 'ping' is available in the container (add 'apk add iputils' or equiv. to Dockerfile if needed).
+// Note: Run container with --cap-add=NET_RAW or privileged for ICMP; else, consider TCP-based alternative below.
 //
 // Parameters:
 //   - ctx: The context to control timeout and cancellation.
@@ -1550,21 +1553,37 @@ func calculateRoundTripProximity(duration int, masterAddr string) (float64, erro
 	if !isValidAddr(masterAddr) {
 		return 0.0, fmt.Errorf("invalid master address: %s", masterAddr)
 	}
+
+	host := strings.TrimSuffix(masterAddr, strings.SplitN(masterAddr, ":", 2)[1])
+	if host == "" {
+		return 0.0, fmt.Errorf("could not extract host from address: %s", masterAddr)
+	}
+
 	var buffer bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(duration+5)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ping", "-c", fmt.Sprintf("%d", duration), masterAddr)
+
+	cmd := exec.CommandContext(ctx, "ping", "-c", fmt.Sprintf("%d", duration), host) // Ping host only (ICMP)
 	cmd.Stdout = &buffer
-	if cmd.Run() != nil {
-		buffer.Reset()
-		buffer.WriteString("time=0.00 ms") // use this as a base case
-		log.Printf("failed to  ping master (%s) \n", masterAddr)
+	cmd.Stderr = &buffer // Capture stderr too for parse
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("failed to ping master host (%s): %v", host, err)
+		output := "time=0.00 ms"
+		rrt, parseErr := extractAverageRTT(output)
+		if parseErr != nil {
+			return 0.0, fmt.Errorf("parse error on fallback: %w", parseErr)
+		}
+		return rrt, nil
 	}
+
 	output := buffer.String()
 	rrt, err := extractAverageRTT(output)
 	if err != nil {
-		log.Printf("error extracting average round-trip time: %v", err)
+		log.Printf("error extracting average RTT: %v", err)
+		return 0.0, err
 	}
+	log.Printf("Average RTT to %s: %.2f ms", host, rrt)
 	return rrt, nil
 }
 
@@ -1581,26 +1600,36 @@ func calculateRoundTripProximity(duration int, masterAddr string) (float64, erro
 // Returns:
 //   - A float64 representing the average RTT in milliseconds.
 //   - An error if no valid RTT values are found, the input is empty, or parsing fails.
-
-func extractAverageRTT(input string) (float64, error) {
-	re := regexp.MustCompile(`time=([\d.]+)\s*ms`)
-	matches := re.FindAllStringSubmatch(input, -1)
-	total := 0.0
-	cnt := 0
-	for _, match := range matches {
-		v, err := strconv.ParseFloat(match[1], 64)
-		if err != nil {
-			return 0.0, err
-		}
-		cnt += 1
-		total += v
+func extractAverageRTT(output string) (float64, error) {
+	if strings.Contains(output, "time=0.00 ms") {
+		return 0.0, nil
 	}
-	return total / float64(cnt), nil
+	re := regexp.MustCompile(`avg = ([\d.]+) ms`)
+	match := re.FindStringSubmatch(output)
+	if len(match) < 2 {
+		return 0.0, fmt.Errorf("no avg RTT found in: %s", output)
+	}
+	return strconv.ParseFloat(match[1], 64)
 }
 
-// isValidAddr checks if the address is a valid IP or hostname (basic validation).
+// isValidAddr checks if the address is a valid IP or hostname, with or without port (basic validation).
+// Supports formats like "master", "master:9090", "0.0.0.0:9090", or "192.168.1.1:9090".
+// Host: alphanumeric, dots, hyphens (loose for hostnames/Docker services/IPv4).
+// Port (if present): 1-5 digits (no range check, as it's basic).
 func isValidAddr(addr string) bool {
-	// Basic validation: non-empty and contains only allowed characters
-	return len(addr) > 0 && (regexp.MustCompile(`^[a-zA-Z0-9.-]+$`).MatchString(addr) ||
-		regexp.MustCompile(`^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):([0-9]{1,5})$`).MatchString(addr))
+	if len(addr) == 0 {
+		return false
+	}
+
+	// Regex for host-only: e.g., "master", "localhost", "192.168.1.1"
+	hostOnly := regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+
+	// Regex for host:port: e.g., "master:9090", "0.0.0.0:8080"
+	// Loose host covers basic IPv4; strict IPv4 optional but included for precision
+	hostPortLoose := regexp.MustCompile(`^([a-zA-Z0-9.-]+):([0-9]{1,5})$`)
+	hostPortIPv4 := regexp.MustCompile(`^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):([0-9]{1,5})$`)
+
+	return hostOnly.MatchString(addr) ||
+		hostPortLoose.MatchString(addr) ||
+		hostPortIPv4.MatchString(addr)
 }
