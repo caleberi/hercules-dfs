@@ -106,7 +106,7 @@ def main(n_columns:int,file_path:str="",ignore_topic:List[str] =[],colorize:bool
                 if line.startswith("panic"):
                     panic = True
                 if not panic:
-                    console.print("[y ellow][b]#" * console.width,)
+                    console.print("[yellow][b]#" * console.width,)
                 console.print(line, end="")
 
 
