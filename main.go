@@ -21,27 +21,41 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
+	"time"
 
 	chunkserver "github.com/caleberi/distributed-system/chunkserver"
 	"github.com/caleberi/distributed-system/common"
+	"github.com/caleberi/distributed-system/gateway"
+	"github.com/caleberi/distributed-system/hercules"
 	masterserver "github.com/caleberi/distributed-system/master_server"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	ChunkServer    string = "chunk_server"
+	MasterServer   string = "master_server"
+	GatewayAddress string = "gateway_server"
+)
+
 type Config struct {
-	IsMaster      bool
-	ServerAddress common.ServerAddr
-	MasterAddress common.ServerAddr
-	RootDir       string
-	LogLevel      string
+	ServerType     string
+	RootDir        string
+	LogLevel       string
+	ServerAddress  common.ServerAddr
+	MasterAddress  common.ServerAddr
+	RedisAddress   common.ServerAddr
+	GatewayAddress int
 }
 
 func parseConfig() (Config, error) {
-	isMaster := flag.Bool("isMaster", false, "run as master server (default: chunk server)")
-	serverAddress := flag.String("serverAddress", "127.0.0.1:8085", "server address to listen on (host:port)")
+	serverType := flag.String("ServerType", "chunk_server", "run as a particular server (default: chunk_server, master_server, gateway_server)")
+	serverAddress := flag.String("serverAddr", "127.0.0.1:8085", "server address to listen on (host:port)")
 	masterAddress := flag.String("masterAddr", "127.0.0.1:9090", "master server address (host:port)")
+	redisAddress := flag.String("redisAddr", "127.0.0.1:9090", "redis server address (host:port)")
+	gatewayAddress := flag.Int("gatewayAddr", 8089, "gateway http server address (host:port)")
 	rootDir := flag.String("rootDir", "mroot", "root directory for file system storage")
 	logLevel := flag.String("logLevel", "debug", "logging level (debug, info, warn, error)")
 
@@ -58,12 +72,18 @@ func parseConfig() (Config, error) {
 		return Config{}, fmt.Errorf("invalid log level: %s; must be debug, info, warn, or error", *logLevel)
 	}
 
+	supportedServerType := []string{GatewayAddress, ChunkServer, MasterServer}
+	if !slices.Contains(supportedServerType, *serverType) {
+		return Config{}, fmt.Errorf("server type not supported")
+	}
 	return Config{
-		IsMaster:      *isMaster,
-		ServerAddress: common.ServerAddr(*serverAddress),
-		MasterAddress: common.ServerAddr(*masterAddress),
-		RootDir:       absRootDir,
-		LogLevel:      *logLevel,
+		ServerType:     *serverType,
+		ServerAddress:  common.ServerAddr(*serverAddress),
+		MasterAddress:  common.ServerAddr(*masterAddress),
+		GatewayAddress: *gatewayAddress,
+		RedisAddress:   common.ServerAddr(*redisAddress),
+		RootDir:        absRootDir,
+		LogLevel:       *logLevel,
 	}, nil
 }
 
@@ -103,20 +123,11 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if cfg.IsMaster {
-		log.Info().Msgf("Starting MasterServer on %s with root directory %s", cfg.ServerAddress, cfg.RootDir)
-		server := masterserver.NewMasterServer(ctx, cfg.MasterAddress, cfg.RootDir)
-		go func() {
-			<-quit
-			log.Info().Msg("Received shutdown signal, stopping MasterServer...")
-			server.Shutdown()
-			cancel()
-		}()
-		<-ctx.Done()
-	} else {
+	switch cfg.ServerType {
+	case ChunkServer:
 		log.Info().Msgf("Starting ChunkServer on %s, connecting to master at %s, using root directory %s",
 			cfg.ServerAddress, cfg.MasterAddress, cfg.RootDir)
-		server, err := chunkserver.NewChunkServer(cfg.ServerAddress, cfg.MasterAddress, cfg.RootDir)
+		server, err := chunkserver.NewChunkServer(cfg.ServerAddress, cfg.MasterAddress, cfg.RedisAddress, cfg.RootDir)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to create ChunkServer")
 			os.Exit(1)
@@ -124,7 +135,45 @@ func main() {
 		go func() {
 			<-quit
 			log.Info().Msg("Received shutdown signal, stopping ChunkServer...")
+			if err := server.Shutdown(); err != nil {
+				log.Err(err).Msg("Error shutting down ChunkServer")
+			}
+			cancel()
+		}()
+		<-ctx.Done()
+	case MasterServer:
+		log.Info().Msgf("Starting MasterServer on %s with root directory %s", cfg.ServerAddress, cfg.RootDir)
+		server := masterserver.NewMasterServer(ctx, cfg.ServerAddress, cfg.RootDir)
+		go func() {
+			<-quit
+			log.Info().Msg("Received shutdown signal, stopping MasterServer...")
 			server.Shutdown()
+			cancel()
+		}()
+		<-ctx.Done()
+	default:
+		log.Info().Msgf("Starting GatewayServer on :%d", cfg.GatewayAddress)
+		client := hercules.NewHerculesClient(ctx, cfg.MasterAddress, 5*time.Minute)
+		server := gateway.NewHerculesHTTPGateway(
+			ctx, client,
+			gateway.GatewayConfig{
+				ServerName:     "Gateway",
+				Address:        cfg.GatewayAddress,
+				Logger:         log.Logger,
+				TlsDir:         "",
+				EnableTLS:      false,
+				MaxHeaderBytes: 1 << 20,
+				IdleTimeout:    10 * time.Second,
+				ReadTimeout:    15 * time.Second,
+				WriteTimeout:   30 * time.Second,
+			})
+		server.Start()
+		go func() {
+			<-quit
+			log.Info().Msg("Received shutdown signal, stopping Gateway Server...")
+			if err := server.Shutdown(); err != nil {
+				log.Err(err).Msg("Error shutting down Gateway Server")
+			}
 			cancel()
 		}()
 		<-ctx.Done()
