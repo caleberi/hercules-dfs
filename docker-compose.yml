@@ -1,0 +1,326 @@
+# Hercules Distributed File System
+# All services built from the same Dockerfile with different SERVER_TYPE args
+# Usage: docker-compose up -d
+
+services:
+  # Master Server - Manages metadata and coordinates chunk servers
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: master_server
+    image: hercules-master:latest
+    container_name: hercules-master
+    hostname: master
+    environment:
+      SERVER_TYPE: master_server
+      SERVER_ADDRESS: 0.0.0.0:9090
+      ROOT_DIR: ./data/master
+      LOG_LEVEL: info
+    ports:
+      - "9090:9090"
+    volumes:
+      - master-data:/data/master
+    networks:
+      - hercules-net
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Chunk Server 1 - Stores file chunks
+  chunkserver1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: chunk_server
+    image: hercules-chunkserver:latest
+    container_name: hercules-chunkserver1
+    hostname: chunkserver1
+    environment:
+      SERVER_TYPE: chunk_server
+      SERVER_ADDRESS: chunkserver1:8081
+      MASTER_ADDR: master:9090
+      REDIS_ADDR: redis:6379
+      ROOT_DIR: ./data/chunks
+      LOG_LEVEL: info
+    ports:
+      - "8081:8081"
+    volumes:
+      - chunk1-data:/data/chunks
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_RAW
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "chunkserver1", "8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Chunk Server 2
+  chunkserver2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: chunk_server
+    image: hercules-chunkserver:latest
+    container_name: hercules-chunkserver2
+    hostname: chunkserver2
+    environment:
+      SERVER_TYPE: chunk_server
+      SERVER_ADDRESS: chunkserver2:8082
+      MASTER_ADDR: master:9090
+      REDIS_ADDR: redis:6379
+      ROOT_DIR: ./data/chunks
+      LOG_LEVEL: info
+    ports:
+      - "8082:8082"
+    volumes:
+      - chunk2-data:/data/chunks
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_RAW
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "chunkserver2", "8082"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Chunk Server 3
+  chunkserver3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: chunk_server
+    image: hercules-chunkserver:latest
+    container_name: hercules-chunkserver3
+    hostname: chunkserver3
+    environment:
+      SERVER_TYPE: chunk_server
+      SERVER_ADDRESS: chunkserver3:8083
+      MASTER_ADDR: master:9090
+      REDIS_ADDR: redis:6379
+      ROOT_DIR: ./data/chunks
+      LOG_LEVEL: info
+    ports:
+      - "8083:8083"
+    volumes:
+      - chunk3-data:/data/chunks
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_RAW
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "chunkserver3", "8083"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Chunk Server 4
+  chunkserver4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: chunk_server
+    image: hercules-chunkserver:latest
+    container_name: hercules-chunkserver4
+    hostname: chunkserver4
+    environment:
+      SERVER_TYPE: chunk_server
+      SERVER_ADDRESS: chunkserver4:8084
+      MASTER_ADDR: master:9090
+      REDIS_ADDR: redis:6379
+      ROOT_DIR: ./data/chunks
+      LOG_LEVEL: info
+    ports:
+      - "8084:8084"
+    volumes:
+      - chunk4-data:/data/chunks
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_RAW
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "chunkserver4", "8084"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Chunk Server 5
+  chunkserver5:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: chunk_server
+    image: hercules-chunkserver:latest
+    container_name: hercules-chunkserver5
+    hostname: chunkserver5
+    environment:
+      SERVER_TYPE: chunk_server
+      SERVER_ADDRESS: chunkserver5:8085
+      MASTER_ADDR: master:9090
+      REDIS_ADDR: redis:6379
+      ROOT_DIR: ./data/chunks
+      LOG_LEVEL: info
+    ports:
+      - "8085:8085"
+    volumes:
+      - chunk5-data:/data/chunks
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - NET_RAW
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "chunkserver5", "8085"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Redis - For failure detection (e.g., heartbeats, pub/sub for monitoring)
+  redis:
+    image: redis:alpine
+    container_name: hercules-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - hercules-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Gateway Server - HTTP API for client interactions
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVER_TYPE: gateway_server
+    image: hercules-gateway:latest
+    container_name: hercules-gateway
+    hostname: gateway
+    environment:
+      SERVER_TYPE: gateway_server
+      GATEWAY_ADDR: 8089
+      MASTER_ADDR: master:9090
+      LOG_LEVEL: info
+    ports:
+      - "8089:8089"
+    networks:
+      - hercules-net
+    depends_on:
+      master:
+        condition: service_healthy
+      chunkserver1:
+        condition: service_healthy
+      chunkserver2:
+        condition: service_healthy
+      chunkserver3:
+        condition: service_healthy
+      chunkserver4:
+        condition: service_healthy
+      chunkserver5:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    user: "0:0"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8089"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  master-data:
+    driver: local
+  chunk1-data:
+    driver: local
+  chunk2-data:
+    driver: local
+  chunk3-data:
+    driver: local
+  chunk4-data:
+    driver: local
+  chunk5-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  hercules-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
