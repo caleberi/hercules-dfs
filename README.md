@@ -25,7 +25,10 @@
 
 Hercules is a project aiming to *reproduce the design and behavior* of the Google File System (GFS), as described in the original 2002 paper. It includes implementations of the key components such as chunkservers, master server, namespace management, and failure detection to explore ideas around large-scale distributed file storage, fault tolerance, and scalability.
 
-This project is written primarily in **Go** with some supporting Python code.
+This project is written primarily in **Go**.
+
+<img width="1920" height="1080" alt="Screenshot 2025-10-19 at 16 28 07" src="https://github.com/user-attachments/assets/c5e24b1f-0478-4415-a608-f897ebf8b5fa" />
+
 
 ---
 
@@ -146,4 +149,5 @@ This project is released under MIT.
 
 * Inspired by *The Google File System* (2003) by Sanjay Ghemawat, Howard Gobioff, and Shun-Tak Leung
 * Thanks to all contributors
+
 
