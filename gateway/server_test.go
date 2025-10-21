@@ -305,7 +305,11 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 			baseURL,
 			url.QueryEscape(filePath))
 
-		resp, err := http.Post(reqURL, "application/octet-stream", bytes.NewReader(appendData))
+		request, err := http.NewRequest(
+			"PATCH", reqURL, bytes.NewReader(appendData))
+		require.NoError(t, err, "Request construction failed")
+		request.Header.Add("Content-type", "application/octet-stream")
+		resp, err := http.DefaultClient.Do(request)
 		require.NoError(t, err, "Append request failed")
 		defer resp.Body.Close()
 
@@ -432,11 +436,12 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 			"target": targetPath,
 		})
 
-		resp, err = http.Post(
-			baseURL+"/api/v1/rename",
-			"application/json",
-			bytes.NewReader(renameBody),
-		)
+		request, err := http.NewRequest(
+			"PATCH", baseURL+"/api/v1/rename",
+			bytes.NewReader(renameBody))
+		require.NoError(t, err, "Request construction failed")
+		request.Header.Add("Content-type", "application/json")
+		resp, err = http.DefaultClient.Do(request)
 		require.NoError(t, err, "Rename request failed")
 		defer resp.Body.Close()
 
@@ -528,7 +533,7 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 		require.NoError(t, err, "Request failed")
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "Expected HTTP 405 Method Not Allowed")
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode, "Expected HTTP 404 Method Not Allowed")
 	})
 }
 

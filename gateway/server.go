@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 	"github.com/caleberi/distributed-system/common"
 	"github.com/caleberi/distributed-system/engine"
 	sdk "github.com/caleberi/distributed-system/hercules"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 )
 
@@ -22,7 +23,6 @@ import (
 type HerculesHTTPGateway struct {
 	client *sdk.HerculesClient
 	server *engine.Server
-	mux    *http.ServeMux
 	ctx    context.Context
 	cancel context.CancelFunc
 	logger zerolog.Logger
@@ -62,17 +62,32 @@ func NewHerculesHTTPGateway(
 	ctx context.Context, client *sdk.HerculesClient, config GatewayConfig) *HerculesHTTPGateway {
 	actx, cancel := context.WithCancel(ctx)
 
-	mux := http.NewServeMux()
+	router := gin.New(func(e *gin.Engine) {
+		e.Use(gin.Logger())
+		e.Use(gin.Recovery())
+		e.Use(cors.New(cors.Config{
+			AllowOrigins: []string{"*"},
+			AllowMethods: []string{"PUT", "PATCH", "GET", "POST", "DELETE", "OPTIONS"},
+			AllowHeaders: []string{
+				"Content-Type", "Content-Length",
+				"accept", "origin", "Cache-Control",
+			},
+			ExposeHeaders:    []string{"Content-Length"},
+			AllowCredentials: true,
+			AllowWildcard:    false,
+			MaxAge:           12 * time.Hour,
+		}))
+		e.RemoveExtraSlash = true
+		e.UnescapePathValues = false
+		e.RedirectTrailingSlash = false
+	})
 
 	gateway := &HerculesHTTPGateway{
 		client: client,
 		ctx:    actx,
 		cancel: cancel,
-		mux:    mux,
 		mu:     sync.RWMutex{},
 	}
-
-	gateway.registerRoutes()
 
 	loggerWriter := config.Logger
 	if loggerWriter == nil {
@@ -95,7 +110,8 @@ func NewHerculesHTTPGateway(
 		},
 	)
 
-	gateway.server.Mux = mux
+	gateway.registerRoutes(router)
+	gateway.server.Mux = router
 
 	if config.Logger != nil {
 		gateway.logger = zerolog.New(config.Logger).With().Timestamp().Logger()
@@ -107,27 +123,26 @@ func NewHerculesHTTPGateway(
 }
 
 // registerRoutes sets up all HTTP endpoints following GFS operations.
-func (g *HerculesHTTPGateway) registerRoutes() {
-
+func (g *HerculesHTTPGateway) registerRoutes(router *gin.Engine) {
 	// Chunk operations
-	g.mux.HandleFunc("/api/v1/chunk/handle", g.handleGetChunkHandle)
-	g.mux.HandleFunc("/api/v1/chunk/servers", g.handleGetChunkServers)
+	router.GET("/api/v1/chunk/handle", g.handleGetChunkHandle)
+	router.GET("/api/v1/chunk/servers", g.handleGetChunkServers)
 
 	// File system operations
-	g.mux.HandleFunc("/api/v1/mkdir", g.handleMkDir)
-	g.mux.HandleFunc("/api/v1/create", g.handleCreateFile)
-	g.mux.HandleFunc("/api/v1/delete", g.handleDeleteFile)
-	g.mux.HandleFunc("/api/v1/rename", g.handleRenameFile)
-	g.mux.HandleFunc("/api/v1/list", g.handleList)
-	g.mux.HandleFunc("/api/v1/fileinfo", g.handleGetFileInfo)
+	router.POST("/api/v1/mkdir", g.handleMkDir)
+	router.POST("/api/v1/create", g.handleCreateFile)
+	router.DELETE("/api/v1/delete", g.handleDeleteFile)
+	router.PATCH("/api/v1/rename", g.handleRenameFile)
+	router.GET("/api/v1/list", g.handleList)
+	router.GET("/api/v1/fileinfo", g.handleGetFileInfo)
 
 	// Data operations
-	g.mux.HandleFunc("/api/v1/read", g.handleRead)
-	g.mux.HandleFunc("/api/v1/write", g.handleWrite)
-	g.mux.HandleFunc("/api/v1/append", g.handleAppend)
+	router.GET("/api/v1/read", g.handleRead)
+	router.POST("/api/v1/write", g.handleWrite)
+	router.PATCH("/api/v1/append", g.handleAppend)
 
 	// Health check
-	g.mux.HandleFunc("/health", g.handleHealth)
+	router.GET("/health", g.handleHealth)
 }
 
 // Start begins listening for HTTP requests using engine.Server.
@@ -169,37 +184,31 @@ type SuccessResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-func (g *HerculesHTTPGateway) respondJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+func (g *HerculesHTTPGateway) respondJSON(c *gin.Context, status int, data interface{}) {
+	c.JSON(status, data)
 }
 
-func (g *HerculesHTTPGateway) respondError(w http.ResponseWriter, status int, err error) {
+func (g *HerculesHTTPGateway) respondError(c *gin.Context, status int, err error) {
 	g.logger.Error().Err(err).Int("status", status).Msg("Request error")
-	g.respondJSON(w, status, ErrorResponse{
+	c.JSON(status, ErrorResponse{
 		Error:   err.Error(),
 		Message: "Operation failed",
 	})
 }
 
-func (g *HerculesHTTPGateway) handleMkDir(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleMkDir(c *gin.Context) {
 
 	var req struct {
 		Path string `json:"path"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+	if err := c.BindJSON(&req); err != nil {
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
 	if req.Path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -208,34 +217,30 @@ func (g *HerculesHTTPGateway) handleMkDir(w http.ResponseWriter, r *http.Request
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "Directory created successfully",
 		Data:    map[string]string{"path": req.Path},
 	})
 }
 
-func (g *HerculesHTTPGateway) handleCreateFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleCreateFile(c *gin.Context) {
 
 	var req struct {
 		Path string `json:"path"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+	if err := c.BindJSON(&req); err != nil {
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
 	if req.Path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -246,7 +251,7 @@ func (g *HerculesHTTPGateway) handleCreateFile(w http.ResponseWriter, r *http.Re
 		err = g.client.MkDir(common.Path(req.Path))
 		g.mu.Unlock()
 		if err != nil {
-			g.respondError(w, http.StatusInternalServerError, err)
+			g.respondError(c, http.StatusInternalServerError, err)
 			return
 		}
 	}
@@ -256,34 +261,30 @@ func (g *HerculesHTTPGateway) handleCreateFile(w http.ResponseWriter, r *http.Re
 	g.mu.Unlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "File created successfully",
 		Data:    map[string]string{"path": req.Path},
 	})
 }
 
-func (g *HerculesHTTPGateway) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleDeleteFile(c *gin.Context) {
 
 	var req struct {
 		Path string `json:"path"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+	if err := c.BindJSON(&req); err != nil {
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
 	if req.Path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -292,36 +293,31 @@ func (g *HerculesHTTPGateway) handleDeleteFile(w http.ResponseWriter, r *http.Re
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "File deleted successfully",
 		Data:    map[string]string{"path": req.Path},
 	})
 }
 
-func (g *HerculesHTTPGateway) handleRenameFile(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodPut {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-
+func (g *HerculesHTTPGateway) handleRenameFile(c *gin.Context) {
 	var req struct {
 		Source string `json:"source"`
 		Target string `json:"target"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+	if err := c.BindJSON(&req); err != nil {
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
 	if req.Source == "" || req.Target == "" {
 		g.respondError(
-			w, http.StatusBadRequest,
+			c, http.StatusBadRequest,
 			fmt.Errorf("source and target paths are required"))
 		return
 	}
@@ -331,11 +327,11 @@ func (g *HerculesHTTPGateway) handleRenameFile(w http.ResponseWriter, r *http.Re
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "File renamed successfully",
 		Data: map[string]string{
@@ -345,13 +341,8 @@ func (g *HerculesHTTPGateway) handleRenameFile(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (g *HerculesHTTPGateway) handleList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
-
-	path := r.URL.Query().Get("path")
+func (g *HerculesHTTPGateway) handleList(c *gin.Context) {
+	path := c.Query("path")
 	if path == "" {
 		path = "/"
 	}
@@ -361,11 +352,11 @@ func (g *HerculesHTTPGateway) handleList(w http.ResponseWriter, r *http.Request)
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Data: map[string]any{
 			"path":    path,
@@ -374,15 +365,11 @@ func (g *HerculesHTTPGateway) handleList(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (g *HerculesHTTPGateway) handleGetFileInfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleGetFileInfo(c *gin.Context) {
 
-	path := r.URL.Query().Get("path")
+	path := c.Query("path")
 	if path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -391,11 +378,11 @@ func (g *HerculesHTTPGateway) handleGetFileInfo(w http.ResponseWriter, r *http.R
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Data: map[string]any{
 			"path":   path,
@@ -406,18 +393,14 @@ func (g *HerculesHTTPGateway) handleGetFileInfo(w http.ResponseWriter, r *http.R
 	})
 }
 
-func (g *HerculesHTTPGateway) handleRead(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleRead(c *gin.Context) {
 
-	path := r.URL.Query().Get("path")
-	offsetStr := r.URL.Query().Get("offset")
-	lengthStr := r.URL.Query().Get("length")
+	path := c.Query("path")
+	offsetStr := c.Query("offset")
+	lengthStr := c.Query("length")
 
 	if path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -438,27 +421,21 @@ func (g *HerculesHTTPGateway) handleRead(w http.ResponseWriter, r *http.Request)
 	g.mu.RUnlock()
 
 	if err != nil && err != io.EOF {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("X-Bytes-Read", strconv.Itoa(n))
-	w.WriteHeader(http.StatusOK)
-	w.Write(data[:n])
+	c.Header("X-Bytes-Read", strconv.Itoa(n))
+	c.Data(http.StatusOK, "application/octet-stream", data[:n])
 }
 
-func (g *HerculesHTTPGateway) handleWrite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodPut {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleWrite(c *gin.Context) {
 
-	path := r.URL.Query().Get("path")
-	offsetStr := r.URL.Query().Get("offset")
+	path := c.Query("path")
+	offsetStr := c.Query("offset")
 
 	if path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
@@ -467,9 +444,9 @@ func (g *HerculesHTTPGateway) handleWrite(w http.ResponseWriter, r *http.Request
 		offset = 0
 	}
 
-	data, err := io.ReadAll(r.Body)
+	data, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
@@ -478,11 +455,11 @@ func (g *HerculesHTTPGateway) handleWrite(w http.ResponseWriter, r *http.Request
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "Data written successfully",
 		Data: map[string]any{
@@ -492,21 +469,17 @@ func (g *HerculesHTTPGateway) handleWrite(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (g *HerculesHTTPGateway) handleAppend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleAppend(c *gin.Context) {
 
-	path := r.URL.Query().Get("path")
+	path := c.Query("path")
 	if path == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
+	data, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		g.respondError(w, http.StatusBadRequest, err)
+		g.respondError(c, http.StatusBadRequest, err)
 		return
 	}
 
@@ -515,11 +488,11 @@ func (g *HerculesHTTPGateway) handleAppend(w http.ResponseWriter, r *http.Reques
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "Data appended successfully",
 		Data: map[string]any{
@@ -529,23 +502,19 @@ func (g *HerculesHTTPGateway) handleAppend(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (g *HerculesHTTPGateway) handleGetChunkHandle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleGetChunkHandle(c *gin.Context) {
 
-	path := r.URL.Query().Get("path")
-	indexStr := r.URL.Query().Get("index")
+	path := c.Query("path")
+	indexStr := c.Query("index")
 
 	if path == "" || indexStr == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("path and index are required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path and index are required"))
 		return
 	}
 
 	index, err := strconv.ParseInt(indexStr, 10, 64)
 	if err != nil {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("invalid index"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("invalid index"))
 		return
 	}
 
@@ -554,11 +523,11 @@ func (g *HerculesHTTPGateway) handleGetChunkHandle(w http.ResponseWriter, r *htt
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Data: map[string]any{
 			"handle": handle,
@@ -568,21 +537,17 @@ func (g *HerculesHTTPGateway) handleGetChunkHandle(w http.ResponseWriter, r *htt
 	})
 }
 
-func (g *HerculesHTTPGateway) handleGetChunkServers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		g.respondError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
-	}
+func (g *HerculesHTTPGateway) handleGetChunkServers(c *gin.Context) {
 
-	handleStr := r.URL.Query().Get("handle")
+	handleStr := c.Query("handle")
 	if handleStr == "" {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("handle is required"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("handle is required"))
 		return
 	}
 
 	handle, err := strconv.ParseInt(handleStr, 10, 64)
 	if err != nil {
-		g.respondError(w, http.StatusBadRequest, fmt.Errorf("invalid handle"))
+		g.respondError(c, http.StatusBadRequest, fmt.Errorf("invalid handle"))
 		return
 	}
 
@@ -591,11 +556,11 @@ func (g *HerculesHTTPGateway) handleGetChunkServers(w http.ResponseWriter, r *ht
 	g.mu.RUnlock()
 
 	if err != nil {
-		g.respondError(w, http.StatusInternalServerError, err)
+		g.respondError(c, http.StatusInternalServerError, err)
 		return
 	}
 
-	g.respondJSON(w, http.StatusOK, SuccessResponse{
+	g.respondJSON(c, http.StatusOK, SuccessResponse{
 		Success: true,
 		Data: map[string]any{
 			"handle":      lease.Handle,
@@ -606,8 +571,8 @@ func (g *HerculesHTTPGateway) handleGetChunkServers(w http.ResponseWriter, r *ht
 	})
 }
 
-func (g *HerculesHTTPGateway) handleHealth(w http.ResponseWriter, r *http.Request) {
-	g.respondJSON(w, http.StatusOK, map[string]interface{}{
+func (g *HerculesHTTPGateway) handleHealth(c *gin.Context) {
+	g.respondJSON(c, http.StatusOK, map[string]any{
 		"status":  "healthy",
 		"service": "hercules-http-gateway",
 		"time":    time.Now().Unix(),
