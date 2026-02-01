@@ -34,9 +34,9 @@ func (e Error) Error() string {
 }
 
 type PathInfo struct {
-	Path   string // path to file/dirname
-	Name   string // filename or dirname
-	IsDir  bool   // register as a directory if the path is not the basefile
+	Path   string
+	Name   string
+	IsDir  bool
 	Length int64
 	Chunk  int64
 }
@@ -52,9 +52,9 @@ type MachineInfo struct {
 }
 
 type Mutation struct {
-	MutationType MutationType // action type for this mutation
-	Data         []byte       // the data to be append / written/ deleted from chunk
-	Offset       Offset       // takes note of the starting point of a particular mutation
+	MutationType MutationType
+	Data         []byte
+	Offset       Offset
 }
 
 type PersistedChunkInfo struct {
@@ -63,22 +63,18 @@ type PersistedChunkInfo struct {
 	Length               Offset
 	Checksum             Checksum
 	Mutations            map[ChunkVersion]Mutation
-	Completed, Abandoned bool      // this handle is completed <that it is filled>
-	ChunkSize            int64     // Size of the chunk
-	CreationTime         time.Time // Creation time of the chunk
-	LastModified         time.Time // Last modified time of the chunk
-	AccessTime           time.Time // Last access time of the chunk
-	Replication          int       // Replication level of the chunk (we need to know the number of replication  that we have )
-	ServerIP             string    // IP address of the chunk server
-	ServerStatus         int       // Status of the chunk server (last know server )
-	MetadataVersion      int       // Version of metadata associated with the chunk
-	StatusFlags          []string  // Flags indicating the status of the chunk
+	Completed, Abandoned bool
+	ChunkSize            int64
+	CreationTime         time.Time
+	LastModified         time.Time
+	AccessTime           time.Time
+	Replication          int
+	ServerStatus         int
+	MetadataVersion      int
+	StatusFlags          []string
 }
 type Memory struct {
-	Alloc      float64
-	TotalAlloc float64
-	Sys        float64
-	NumGC      float64
+	Alloc, TotalAlloc, Sys, NumGC float64
 }
 
 type FileInfo struct {
@@ -88,11 +84,11 @@ type FileInfo struct {
 }
 
 type Lease struct {
-	Handle      ChunkHandle // each lease acquired should be associated to a particular chunkhandle
+	Handle      ChunkHandle
 	Expire      time.Time
 	InUse       bool
-	Primary     ServerAddr   // the current chunk server (as primary)
-	Secondaries []ServerAddr // to notice all secondary  chunk server
+	Primary     ServerAddr
+	Secondaries []ServerAddr
 }
 
 func (ls *Lease) IsExpired(u time.Time) bool {
