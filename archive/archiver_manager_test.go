@@ -2,6 +2,9 @@ package archivemanager
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,11 +67,51 @@ func testSetup(t *testing.T) (*filesystem.FileSystem, *ArchiverManager, []byte, 
 }
 
 func TestMain(m *testing.M) {
+	// Download a large text file from Project Gutenberg (War and Peace by Leo Tolstoy)
+	// This is approximately 3.2MB of text data
+	url := "https://www.gutenberg.org/files/2600/2600-0.txt"
+
 	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		os.MkdirAll(filepath.Dir(dataFile), 0755)
-		os.WriteFile(dataFile, []byte("test data for compression"), 0644)
+		fmt.Println("Downloading large test file from Project Gutenberg...")
+		if err := downloadFile(url, dataFile); err != nil {
+			fmt.Printf("Warning: Failed to download test file: %v\n", err)
+			fmt.Println("Creating fallback test data...")
+			os.MkdirAll(filepath.Dir(dataFile), 0755)
+			os.WriteFile(dataFile, []byte("fallback test data for compression"), 0644)
+		} else {
+			fmt.Printf("Successfully downloaded test file to %s\n", dataFile)
+		}
 	}
 	os.Exit(m.Run())
+}
+
+func downloadFile(url, filepath string) error {
+	if err := os.MkdirAll(filepath[:strings.LastIndex(filepath, "/")], 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer out.Close()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }
 
 type pathStat struct {
