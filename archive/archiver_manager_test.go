@@ -1,0 +1,492 @@
+package archivemanager
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/caleberi/distributed-system/common"
+	filesystem "github.com/caleberi/distributed-system/file_system"
+	"github.com/jaswdr/faker/v2"
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	dataFile = "./source.txt"
+	timeout  = 5 * time.Second
+)
+
+var (
+	filepaths = []string{
+		"test_data2/test_data1/test_1.txt",
+		"test_data2/test_1.txt",
+		"test_data2/test_data1/test_data3/test_2.txt",
+		"test_data1/test_2.txt",
+	}
+	dirpaths = []string{
+		"test_data1",
+		"test_data1/test_data",
+		"test_data2/test_data1/test_data3",
+	}
+)
+
+func testSetup(t *testing.T) (*filesystem.FileSystem, *ArchiverManager, []byte, string) {
+	t.Helper()
+
+	data := []byte(faker.New().Lorem().Paragraph(100))
+
+	tempDir := t.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+
+	for _, dir := range dirpaths {
+		assert.NoErrorf(t, fsys.MkDir(dir), "failed to create directory %s", dir)
+	}
+
+	for _, path := range filepaths {
+		assert.NoErrorf(t, fsys.CreateFile(path), "failed to create file %s: %v", path)
+	}
+
+	for _, path := range filepaths {
+		f, err := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+		assert.NoError(t, err, "failed to retrieve file %s: %v", path, err)
+		n, err := f.Write(data)
+		assert.NoError(t, err)
+		assert.GreaterOrEqual(t, n, 0)
+		assert.NoError(t, f.Close(), "failed to close file %s: %v", path, err)
+	}
+
+	archiver := NewArchiver(t.Context(), fsys, 2)
+	return fsys, archiver, data, tempDir
+}
+
+func TestMain(m *testing.M) {
+	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
+		os.MkdirAll(filepath.Dir(dataFile), 0755)
+		os.WriteFile(dataFile, []byte("test data for compression"), 0644)
+	}
+	os.Exit(m.Run())
+}
+
+type pathStat struct {
+	size int64
+	path string
+}
+
+func TestArchiveCompressWithFileSystem(t *testing.T) {
+	fsys, archiver, _, _ := testSetup(t)
+	defer archiver.Close()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	pathStats := make(map[common.Path]pathStat)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for _, path := range filepaths {
+			p := common.Path(path)
+			info, err := fsys.GetStat(path)
+			assert.NoError(t, err)
+			if info != nil {
+				mu.Lock()
+				pathStats[p] = pathStat{size: info.Size(), path: path}
+				mu.Unlock()
+			}
+			assert.NoError(t, archiver.SubmitCompress(p))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range filepaths {
+			select {
+			case result := <-archiver.CompressPipeline.Result:
+				assert.NoError(t, result.Err)
+				assert.NotEmpty(t, result.Path)
+				info, err := fsys.GetStat(string(result.Path))
+				assert.NoError(t, err)
+				assert.True(t, info.Size() >= 0)
+				assert.True(t, strings.HasSuffix(string(result.Path), zipExt))
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestArchiveDecompressionWithFileSystem(t *testing.T) {
+	fsys, archiver, _, _ := testSetup(t)
+	defer archiver.Close()
+
+	for _, path := range filepaths {
+		assert.NoError(t, archiver.SubmitCompress(common.Path(path)))
+	}
+
+	go func() {
+		for result := range archiver.CompressPipeline.Result {
+			assert.NoError(t, result.Err)
+			info, err := fsys.GetStat(string(result.Path))
+			if info != nil {
+				assert.NoError(t, err)
+				assert.True(t, info.Mode().IsRegular())
+				continue
+			}
+			err = archiver.SubmitDecompress(result.Path)
+			if err != nil {
+				assert.ErrorContains(t, err, "archiver has been closed")
+				continue
+			}
+			assert.NoError(t, err)
+		}
+	}()
+
+	go func() {
+		for result := range archiver.DecompressPipeline.Result {
+			assert.NoError(t, result.Err)
+			assert.True(t, !strings.HasSuffix(string(result.Path), zipExt))
+			info, err := fsys.GetStat(string(result.Path))
+			assert.NoError(t, err)
+			assert.True(t, info.Mode().IsRegular())
+			f, err := fsys.GetFile(string(result.Path), os.O_RDONLY, 0644)
+			assert.NoError(t, err)
+			assert.NoError(t, f.Close())
+		}
+	}()
+}
+
+func TestNormalCompression(t *testing.T) {
+	fsys, archiver, originalData, _ := testSetup(t)
+
+	tests := []struct {
+		name      string
+		path      string
+		content   []byte
+		expectErr bool
+	}{
+		{
+			name:      "valid file",
+			path:      "test.txt",
+			content:   originalData,
+			expectErr: false,
+		},
+		{
+			name:      "empty file",
+			path:      "empty.txt",
+			content:   []byte{},
+			expectErr: false,
+		},
+		{
+			name:      "non-existent file",
+			path:      "nonexistent.txt",
+			content:   nil,
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.content != nil {
+				err := fsys.CreateFile(tt.path)
+				assert.NoError(t, err)
+				f, err := fsys.GetFile(tt.path, os.O_RDWR|os.O_TRUNC, 0644)
+				assert.NoError(t, err)
+				_, err = f.Write(tt.content)
+				assert.NoError(t, err)
+				assert.NoError(t, f.Close())
+			}
+
+			newPath, err := archiver.compress(common.Path(tt.path))
+			if tt.expectErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.True(t, strings.HasSuffix(newPath, ".gz"))
+			info, err := fsys.GetStat(newPath)
+			assert.NoError(t, err)
+			assert.False(t, info.Size() == 0)
+		})
+	}
+}
+
+func BenchmarkCompression(b *testing.B) {
+	data := []byte(faker.New().Lorem().Paragraph(100))
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+	archiver := NewArchiver(context.Background(), fsys, 2)
+	defer archiver.Close()
+
+	b.Run("SingleFile", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("bench_single", "file.txt")
+			fsys.MkDir("bench_single")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(data)
+			f.Close()
+			b.StartTimer()
+
+			_, err := archiver.compress(common.Path(path))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("SmallFile_1KB", func(b *testing.B) {
+		smallData := make([]byte, 1024)
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("bench_small", "file.txt")
+			fsys.MkDir("bench_small")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(smallData)
+			f.Close()
+			b.StartTimer()
+
+			_, err := archiver.compress(common.Path(path))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("LargeFile_1MB", func(b *testing.B) {
+		largeData := make([]byte, 1024*1024) // 1MB
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("bench_large", "file.txt")
+			fsys.MkDir("bench_large")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(largeData)
+			f.Close()
+			b.StartTimer()
+
+			_, err := archiver.compress(common.Path(path))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkDecompression(b *testing.B) {
+	data := []byte(faker.New().Lorem().Paragraph(100))
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+	archiver := NewArchiver(context.Background(), fsys, 2)
+	defer archiver.Close()
+
+	b.Run("SingleFile", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("decomp_bench", "file.txt")
+			fsys.MkDir("decomp_bench")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(data)
+			f.Close()
+			compressedPath, _ := archiver.compress(common.Path(path))
+			b.StartTimer()
+
+			_, err := archiver.decompress(common.Path(compressedPath))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("SmallFile_1KB", func(b *testing.B) {
+		smallData := make([]byte, 1024)
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("decomp_small", "file.txt")
+			fsys.MkDir("decomp_small")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(smallData)
+			f.Close()
+			compressedPath, _ := archiver.compress(common.Path(path))
+			b.StartTimer()
+
+			_, err := archiver.decompress(common.Path(compressedPath))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("LargeFile_1MB", func(b *testing.B) {
+		largeData := make([]byte, 1024*1024)
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			path := filepath.Join("decomp_large", "file.txt")
+			fsys.MkDir("decomp_large")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(largeData)
+			f.Close()
+			compressedPath, _ := archiver.compress(common.Path(path))
+			b.StartTimer()
+
+			_, err := archiver.decompress(common.Path(compressedPath))
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkConcurrentSubmissions(b *testing.B) {
+	data := []byte(faker.New().Lorem().Paragraph(50))
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+
+	b.Run("2Workers", func(b *testing.B) {
+		benchmarkWorkers(b, fsys, data, 2)
+	})
+
+	b.Run("4Workers", func(b *testing.B) {
+		benchmarkWorkers(b, fsys, data, 4)
+	})
+
+	b.Run("8Workers", func(b *testing.B) {
+		benchmarkWorkers(b, fsys, data, 8)
+	})
+
+	b.Run("16Workers", func(b *testing.B) {
+		benchmarkWorkers(b, fsys, data, 16)
+	})
+}
+
+func benchmarkWorkers(b *testing.B, fsys *filesystem.FileSystem, data []byte, workers int) {
+	archiver := NewArchiver(context.Background(), fsys, workers)
+	defer archiver.Close()
+
+	b.ReportAllocs()
+
+	for i := 0; b.Loop(); i++ {
+		b.StopTimer()
+		paths := make([]string, 10)
+		for j := range 10 {
+			path := filepath.Join("bench_concurrent", "file_"+string(rune(i))+"_"+string(rune(j))+".txt")
+			fsys.MkDir("bench_concurrent")
+			fsys.CreateFile(path)
+			f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+			f.Write(data)
+			f.Close()
+			paths[j] = path
+		}
+		b.StartTimer()
+
+		var wg sync.WaitGroup
+		for _, path := range paths {
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				archiver.SubmitCompress(common.Path(p))
+			}(path)
+		}
+
+		for range paths {
+			<-archiver.CompressPipeline.Result
+		}
+		wg.Wait()
+	}
+}
+
+func BenchmarkSubmitCompress(b *testing.B) {
+	data := []byte(faker.New().Lorem().Paragraph(50))
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+	archiver := NewArchiver(context.Background(), fsys, 4)
+	defer archiver.Close()
+
+	paths := make([]string, b.N)
+	for i := 0; b.Loop(); i++ {
+		path := filepath.Join("bench_submit", "file_"+string(rune(i))+".txt")
+		fsys.MkDir("bench_submit")
+		fsys.CreateFile(path)
+		f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+		f.Write(data)
+		f.Close()
+		paths[i] = path
+	}
+
+	go func() {
+		for range archiver.CompressPipeline.Result {
+		}
+	}()
+
+	b.ReportAllocs()
+
+	for i := 0; b.Loop(); i++ {
+		if err := archiver.SubmitCompress(common.Path(paths[i])); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSubmitDecompress(b *testing.B) {
+	data := []byte(faker.New().Lorem().Paragraph(50))
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+	archiver := NewArchiver(context.Background(), fsys, 4)
+	defer archiver.Close()
+
+	paths := make([]string, b.N)
+	for i := 0; i < b.N; i++ {
+		path := filepath.Join("bench_decomp_submit", "file_"+string(rune(i))+".txt")
+		fsys.MkDir("bench_decomp_submit")
+		fsys.CreateFile(path)
+		f, _ := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
+		f.Write(data)
+		f.Close()
+		compPath, _ := archiver.compress(common.Path(path))
+		paths[i] = compPath
+	}
+
+	go func() {
+		for range archiver.DecompressPipeline.Result {
+		}
+	}()
+
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		if err := archiver.SubmitDecompress(common.Path(paths[i])); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkArchiverLifecycle(b *testing.B) {
+	tempDir := b.TempDir()
+	fsys := filesystem.NewFileSystem(tempDir)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		archiver := NewArchiver(context.Background(), fsys, 4)
+		archiver.Close()
+	}
+}
