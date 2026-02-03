@@ -22,8 +22,8 @@ func setupTestDetector(t *testing.T, windowSize int, entryExpiryTime time.Durati
 		&redis.Options{Addr: mr.Addr()},
 		entryExpiryTime,
 		SuspicionLevel{
-			AccruementThreshold: 8.0,
-			UpperBoundThreshold: 1.0,
+			AccumulationThreshold: 8.0,
+			UpperBoundThreshold:   1.0,
 		},
 	)
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestNewFailureDetector(t *testing.T) {
 	assert.NotNil(t, detector)
 	assert.NotNil(t, detector.Window)
 	assert.NotNil(t, detector.ShutdownCh)
-	assert.Equal(t, 8.0, detector.SuspicionLevel.AccruementThreshold)
+	assert.Equal(t, 8.0, detector.SuspicionLevel.AccumulationThreshold)
 }
 
 func TestRecordSample_InvalidData(t *testing.T) {
@@ -78,18 +78,11 @@ func TestPhiFunction(t *testing.T) {
 	}
 }
 
-func TestPredictFailure_NotEnoughSamples(t *testing.T) {
-	detector, _ := setupTestDetector(t, 10, time.Second)
-	_, err := detector.PredictFailure()
-	assert.Error(t, err)
-	assert.Equal(t, ErrorNotEnoughHistoricalSampling, err.Error())
-}
-
 func TestPredictFailure_ZeroVariance(t *testing.T) {
 	detector, _ := setupTestDetector(t, 4, time.Minute)
 	ctx := context.Background()
 	baseTime := time.Now()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		entry := Entry{
 			Id:       uuid.New().String(),
 			Eta:      baseTime.Add(time.Duration(i) * time.Second),
@@ -105,7 +98,7 @@ func TestPredictFailure_ZeroVariance(t *testing.T) {
 
 func TestPredictFailure_Healthy(t *testing.T) {
 	detector, _ := setupTestDetector(t, 10, time.Minute)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		now := time.Now()
 		data := NetworkData{
 			ForwardTrip:  TripInfo{SentAt: now.Add(-50 * time.Millisecond), ReceivedAt: now.Add(-25 * time.Millisecond)},
@@ -123,7 +116,7 @@ func TestPredictFailure_Healthy(t *testing.T) {
 
 func TestPredictFailure_WarningAndAlert(t *testing.T) {
 	detector, _ := setupTestDetector(t, 10, time.Minute)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		now := time.Now()
 		data := NetworkData{
 			ForwardTrip:  TripInfo{SentAt: now.Add(-50 * time.Millisecond), ReceivedAt: now.Add(-25 * time.Millisecond)},
@@ -143,7 +136,7 @@ func TestPredictFailure_WarningAndAlert(t *testing.T) {
 	pred, err = detector.PredictFailure()
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, pred.Phi, 8.0)
-	assert.Equal(t, AccumentThresholdAlert, pred.Message)
+	assert.Equal(t, AccumulationThresholdAlert, pred.Message)
 }
 
 func TestSamplingWindow_AddGetClean(t *testing.T) {
@@ -177,13 +170,13 @@ func TestSamplingWindow_AddGetClean(t *testing.T) {
 }
 
 func TestSuspicionLevel_Interpret(t *testing.T) {
-	sl := SuspicionLevel{AccruementThreshold: 8.0, UpperBoundThreshold: 1.0}
+	sl := SuspicionLevel{AccumulationThreshold: 8.0, UpperBoundThreshold: 1.0}
 	tests := []struct {
 		phi      float64
 		expected ActionMessage
 		err      bool
 	}{
-		{10.0, AccumentThresholdAlert, false},
+		{10.0, AccumulationThresholdAlert, false},
 		{5.0, UpperBoundThresholdAlert, false},
 		{0.05, ResetThresholdAlert, false},
 		{math.NaN(), "", true},

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/caleberi/distributed-system/utils"
@@ -19,11 +20,11 @@ import (
 //
 //	(2) https://ieeexplore.ieee.org/abstract/document/1353004
 //
-// Goal - create redis backed service that can predict downtime probablity of servers
+// Goal - create redis backed service that can predict downtime probability of servers
 // The implementation of failure detectors on the receiving server can be decomposed into three basic parts
 // as follows:
 //  1. Monitoring. The failure detector gathers information from other processes,
-//     usually through the network,such as heartbeat arrivals or query-response delays.
+//     usually through the network, such as heartbeat arrivals or query-response delays.
 //     Since we are leaving the user to provide the necessary data for the system after obtaining
 //     it via RPC or REST e.t.c Then we define an NetworkData struct that takes in few information about
 //     the network
@@ -36,12 +37,38 @@ import (
 type ActionMessage string
 
 const (
-	AccumentThresholdAlert   ActionMessage = "<ALERT> TENDING TOWARDS SYSTEM FAILURE"
-	UpperBoundThresholdAlert ActionMessage = "<WARNING> SYSTEM STILL CORRECT"
-	ResetThresholdAlert      ActionMessage = "<INFO> SYSTEM ALL GOOD"
+	AccumulationThresholdAlert ActionMessage = "<ALERT> TENDING TOWARDS SYSTEM FAILURE"
+	UpperBoundThresholdAlert   ActionMessage = "<WARNING> SYSTEM STILL CORRECT"
+	ResetThresholdAlert        ActionMessage = "<INFO> SYSTEM ALL GOOD"
+)
 
-	ErrorHistoricalSampling          string = "<ERROR> HISTORICAL SAMPLING ISSUES"
-	ErrorNotEnoughHistoricalSampling string = "<ERROR> NO ENOUGH HISTORICAL SAMPLES"
+const (
+	// MinSamplesRatio defines the minimum ratio of samples required before prediction
+	// Require at least 50% of window to be filled with samples
+	MinSamplesRatio = 0.5
+
+	// DefaultContextTimeout is the default timeout for Redis operations
+	DefaultContextTimeout = 30 * time.Second
+)
+
+var (
+	// ErrHistoricalSampling indicates issues retrieving historical data
+	ErrHistoricalSampling = errors.New("historical sampling issues")
+
+	// ErrNotEnoughHistoricalSamples indicates insufficient samples for prediction
+	ErrNotEnoughHistoricalSamples = errors.New("insufficient historical samples")
+
+	// ErrZeroVariance indicates constant intervals preventing phi calculation
+	ErrZeroVariance = errors.New("zero variance: cannot compute phi")
+
+	// ErrInsufficientIntervalData indicates no interval data available
+	ErrInsufficientIntervalData = errors.New("insufficient interval data")
+
+	// ErrInvalidPhi indicates phi calculation resulted in invalid value
+	ErrInvalidPhi = errors.New("phi is not a number")
+
+	// ErrAlreadyShutdown indicates detector has already been shut down
+	ErrAlreadyShutdown = errors.New("detector already shutdown")
 )
 
 type Prediction struct {
@@ -108,21 +135,25 @@ func (e Entry) Score() int64 {
 	return e.Eta.UnixMilli()
 }
 
-// Suspicion level between a scale of 100
 // SuspicionLevel defines threshold values to interpret ϕ values.
 // Thresholds are in the range of 0 to 100 (percentage scale).
+//
+// The phi (ϕ) value represents the negative log probability of failure:
+//   - ϕ < 1.0: System is healthy (low suspicion)
+//   - 1.0 ≤ ϕ < 8.0: Warning level (moderate suspicion)
+//   - ϕ ≥ 8.0: Alert level (high probability of failure)
 type SuspicionLevel struct {
-	AccruementThreshold float64 // High threshold (ϕ > AccruementThreshold ⇒ Alert)
-	UpperBoundThreshold float64 // Mid threshold  (ϕ between AccruementThreshold and UpperBound ⇒ Warning)
+	AccumulationThreshold float64 // High threshold (ϕ ≥ AccumulationThreshold ⇒ Alert)
+	UpperBoundThreshold   float64 // Mid threshold  (ϕ between UpperBound and Accumulation ⇒ Warning)
 }
 
 func (s SuspicionLevel) Interpret(phi float64) (ActionMessage, error) {
 	if math.IsNaN(phi) {
-		return "", errors.New("phi is not a number")
+		return "", ErrInvalidPhi
 	}
 	switch {
-	case phi >= s.AccruementThreshold:
-		return AccumentThresholdAlert, nil
+	case phi >= s.AccumulationThreshold:
+		return AccumulationThresholdAlert, nil
 	case phi >= s.UpperBoundThreshold:
 		return UpperBoundThresholdAlert, nil
 	default:
@@ -141,18 +172,22 @@ func (s SuspicionLevel) Interpret(phi float64) (ActionMessage, error) {
 //   - Window: Redis backed sampling window storing recent network latency samples.
 //   - ShutdownCh: Channel used to signal shutdown of background cleanup processes.
 //   - SuspicionLevel: Defines threshold values used to interpret the computed ϕ score.
+//   - ContextTimeout: Timeout for Redis operations (default: 30s).
 type FailureDetector struct {
 	ShutdownCh     chan bool
 	SuspicionLevel SuspicionLevel
 	Window         *SamplingWindow[Entry]
+	ContextTimeout time.Duration
+	shutdownOnce   sync.Once
+	mu             sync.RWMutex
+	isShutdown     bool
 }
 
 // NewFailureDetector initializes a FailureDetector instance using the given parameters.
-// It sets up a Redis client, validates connectivity, and starts a background
-// cleaner that periodically flushes stale network data.
+// It sets up a Redis client, validates connectivity, and returns a configured detector.
 //
 // Parameters:
-//   - serverIp: IP address of the current server (used for namespacing keys).
+//   - serverIP: IP address of the current server (used for namespacing keys).
 //   - windowSize: Number of recent samples to retain in the sampling window.
 //   - redisOpts: Redis connection options.
 //   - entryExpiryTime: Duration after which individual samples expire.
@@ -161,6 +196,20 @@ type FailureDetector struct {
 // Returns:
 //   - Pointer to the initialized FailureDetector.
 //   - An error if Redis connection fails.
+//
+// Example:
+//
+//	detector, err := NewFailureDetector(
+//	    "192.168.1.100",
+//	    100,
+//	    &redis.Options{Addr: "localhost:6379"},
+//	    10*time.Second,
+//	    SuspicionLevel{AccumulationThreshold: 8.0, UpperBoundThreshold: 1.0},
+//	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer detector.Shutdown()
 func NewFailureDetector(
 	serverIP string, windowSize int,
 	redisOpts *redis.Options,
@@ -177,12 +226,21 @@ func NewFailureDetector(
 		Window:         window,
 		ShutdownCh:     make(chan bool, 1),
 		SuspicionLevel: suspicionLevel,
+		ContextTimeout: DefaultContextTimeout,
+		isShutdown:     false,
 	}
 	return detector, nil
 }
 
 // RecordSample adds a new network latency sample into the detector's history store in Redis.
 func (fd *FailureDetector) RecordSample(data NetworkData) error {
+	fd.mu.RLock()
+	if fd.isShutdown {
+		fd.mu.RUnlock()
+		return ErrAlreadyShutdown
+	}
+	fd.mu.RUnlock()
+
 	if !data.Valid() {
 		return fmt.Errorf("invalid trip timestamps: forward=%v backward=%v", data.ForwardTrip, data.BackwardTrip)
 	}
@@ -194,7 +252,7 @@ func (fd *FailureDetector) RecordSample(data NetworkData) error {
 		Duration: data.RoundTrip,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), fd.ContextTimeout)
 	defer cancel()
 	return fd.Window.Add(ctx, heartbeat)
 }
@@ -211,7 +269,7 @@ func (fd *FailureDetector) RecordSample(data NetworkData) error {
 //
 // Returns:
 //   - The φ value (suspicion level). Higher values indicate a higher probability of failure.
-//   - If stdDeviation is zero, φ cannot be computed, and Inf is returned.
+//   - If stdDeviation is zero, φ cannot be computed, and +Inf is returned.
 func phi(timeDiff, mean, stdDeviation float64) float64 {
 	if stdDeviation == 0 {
 		return math.Inf(1) // Cannot compute φ with zero variance
@@ -237,16 +295,30 @@ func phi(timeDiff, mean, stdDeviation float64) float64 {
 	return phiValue
 }
 
+// PredictFailure computes the current ϕ value based on historical samples and interprets
+// the result using configured suspicion thresholds.
+//
+// Returns:
+//   - Prediction containing phi value and action message
+//   - Error if insufficient samples or computation fails
 func (fd *FailureDetector) PredictFailure() (Prediction, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	fd.mu.RLock()
+	if fd.isShutdown {
+		fd.mu.RUnlock()
+		return Prediction{}, ErrAlreadyShutdown
+	}
+	fd.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), fd.ContextTimeout)
 	defer cancel()
 	entries, err := fd.Window.Get(ctx)
 	if err != nil {
-		return Prediction{}, errors.New(ErrorHistoricalSampling)
+		return Prediction{}, ErrHistoricalSampling
 	}
 
-	if len(entries) < fd.Window.size/2 {
-		return Prediction{}, errors.New(ErrorNotEnoughHistoricalSampling)
+	minRequiredSamples := int(float64(fd.Window.size) * MinSamplesRatio)
+	if len(entries) < minRequiredSamples {
+		return Prediction{}, ErrNotEnoughHistoricalSamples
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -262,6 +334,10 @@ func (fd *FailureDetector) PredictFailure() (Prediction, error) {
 		intervals[i-1] = arrivalTimes[i] - arrivalTimes[i-1]
 	}
 
+	if len(intervals) == 0 {
+		return Prediction{}, ErrInsufficientIntervalData
+	}
+
 	mean := utils.Sum(intervals) / float64(len(intervals))
 	variance := 0.0
 	utils.ForEach(intervals, func(v float64) {
@@ -270,16 +346,16 @@ func (fd *FailureDetector) PredictFailure() (Prediction, error) {
 	variance /= float64(len(intervals))
 
 	if variance == 0 {
-		return Prediction{}, errors.New("zero variance: cannot compute phi")
+		return Prediction{}, ErrZeroVariance
 	}
 	stdDev := math.Sqrt(variance)
 
 	// Compute time difference from last heartbeat
-	tNow := float64(time.Now().UnixMilli())
-	tLast := arrivalTimes[len(arrivalTimes)-1]
-	delta := tNow - tLast
+	nowMillis := float64(time.Now().UnixMilli())
+	lastHeartbeatMillis := arrivalTimes[len(arrivalTimes)-1]
+	timeSinceLastHeartbeat := nowMillis - lastHeartbeatMillis
 
-	phiValue := phi(delta, mean, stdDev)
+	phiValue := phi(timeSinceLastHeartbeat, mean, stdDev)
 	action, err := fd.SuspicionLevel.Interpret(phiValue)
 	if err != nil {
 		return Prediction{}, err
@@ -291,9 +367,31 @@ func (fd *FailureDetector) PredictFailure() (Prediction, error) {
 	}, nil
 }
 
-func (fd *FailureDetector) Shutdown() {
-	fd.ShutdownCh <- true
-	close(fd.ShutdownCh)
-	fd.Window.rdb.Close()
-	log.Info().Msg("FailureDetector shutdown complete")
+// Shutdown gracefully shuts down the failure detector and closes the Redis connection.
+// It is safe to call multiple times.
+func (fd *FailureDetector) Shutdown() error {
+	var shutdownErr error
+
+	fd.shutdownOnce.Do(func() {
+		fd.mu.Lock()
+		fd.isShutdown = true
+		fd.mu.Unlock()
+
+		select {
+		case fd.ShutdownCh <- true:
+			close(fd.ShutdownCh)
+		default:
+		}
+
+		if fd.Window != nil && fd.Window.rdb != nil {
+			if err := fd.Window.rdb.Close(); err != nil {
+				shutdownErr = fmt.Errorf("failed to close Redis connection: %w", err)
+				log.Error().Err(err).Msg("Failed to close Redis connection")
+			}
+		}
+
+		log.Info().Msg("FailureDetector shutdown complete")
+	})
+
+	return shutdownErr
 }
