@@ -2,6 +2,7 @@ package namespacemanager
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -352,4 +353,41 @@ func TestNewNameSpaceManagerWithContext(t *testing.T) {
 
 	err := nm.MkDir(common.Path("/home"))
 	assert.NoError(t, err, "MkDir should succeed despite context cancellation")
+}
+
+func BenchmarkCreateDeep(b *testing.B) {
+	mgr := NewNameSpaceManager(context.Background(), 10*time.Minute)
+
+	for i := 0; b.Loop(); i++ {
+		path := fmt.Sprintf("/a/b/c/d/e/f/g/h/i/j/file%d.txt", i)
+		mgr.Create(common.Path(path))
+	}
+}
+
+func BenchmarkConcurrentCreates(b *testing.B) {
+	mgr := NewNameSpaceManager(context.Background(), 10*time.Minute)
+	mgr.MkDirAll(common.Path("/test"))
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			path := fmt.Sprintf("/test/file%d.txt", i)
+			mgr.Create(common.Path(path))
+			i++
+		}
+	})
+}
+
+func BenchmarkList(b *testing.B) {
+	mgr := NewNameSpaceManager(context.Background(), 10*time.Minute)
+
+	for i := range 1000 {
+		mgr.Create(common.Path(fmt.Sprintf("/file%d.txt", i)))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mgr.List(common.Path("/"))
+	}
 }

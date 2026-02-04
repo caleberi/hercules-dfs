@@ -170,7 +170,6 @@ func (nm *NamespaceManager) nsTreeToSlice(r *[]SerializedNsTreeNode, node *NsTre
 
 // lockParents acquires locks on the ancestor nodes up to (and including) the parent directory of the given path.
 func (nm *NamespaceManager) lockParents(p common.Path, lock bool) ([]*NsTree, *NsTree, error) {
-	log.Printf("path: >>> %s", p)
 	locked := []*NsTree{}
 	current := nm.root
 	nm.root.RLock()
@@ -415,8 +414,6 @@ func (nm *NamespaceManager) Rename(source, target common.Path) error {
 		}
 	}
 
-	log.Println("==================++YESS=====")
-
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 
@@ -517,6 +514,11 @@ func (nm *NamespaceManager) List(p common.Path) ([]common.PathInfo, error) {
 	for queue.Length() > 0 {
 		current := queue.PopFront()
 		for name, child := range current.childrenNodes {
+			// **FILTER OUT DELETED FILES**
+			if strings.HasPrefix(name, common.DeletedNamespaceFilePrefix) {
+				continue
+			}
+
 			if child.IsDir && len(child.childrenNodes) != 0 {
 				queue.PushBack(child)
 			}
@@ -536,4 +538,35 @@ func (nm *NamespaceManager) List(p common.Path) ([]common.PathInfo, error) {
 // RetrievePartitionFromPath splits a path into its directory path and filename or directory name.
 func (nm *NamespaceManager) RetrievePartitionFromPath(p common.Path) (string, string) {
 	return filepath.Dir(string(p)), filepath.Base(string(p))
+}
+
+// UpdateFileMetadata updates the length and chunk count for a file at the specified path.
+// This should be called after successful append operations to keep namespace metadata current.
+func (nm *NamespaceManager) UpdateFileMetadata(p common.Path, length int64, chunks int64) error {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+
+	dirpath, filename := nm.RetrievePartitionFromPath(p)
+	parents, cwd, err := nm.lockParents(common.Path(dirpath), false)
+	defer nm.unlockParents(parents, false)
+	if err != nil {
+		return err
+	}
+
+	file, ok := cwd.childrenNodes[filename]
+	if !ok {
+		return fmt.Errorf("file %s does not exist", p)
+	}
+
+	if file.IsDir {
+		return fmt.Errorf("%s is a directory, not a file", p)
+	}
+
+	// Update file metadata
+	file.Lock()
+	defer file.Unlock()
+	file.Length = length
+	file.Chunks = chunks
+
+	return nil
 }
