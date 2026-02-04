@@ -22,15 +22,15 @@ var testData = []User{
 	{Id: 12, Name: "test34"},
 }
 
-func setupTestServer() *Server {
+func setupTestServer(t *testing.T, port int) *Server {
 	router := gin.Default()
 
 	router.GET("/user", func(c *gin.Context) {
 		c.JSON(http.StatusOK, testData)
 	})
-	server := NewServer(
+	server, err := NewServer(
 		"Sami",
-		8082,
+		port,
 		os.Stdout,
 		"",
 		ServerOpts{
@@ -40,13 +40,14 @@ func setupTestServer() *Server {
 			ReadHeaderTimeout: 1 * time.Second,
 			WriteTimeout:      1 * time.Second,
 		})
+
+	assert.NoError(t, err)
 	server.Mux = router
 	return server
 }
 
 func TestServerWithMux(t *testing.T) {
-
-	server := setupTestServer()
+	server := setupTestServer(t, 8082)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -67,4 +68,25 @@ func TestServerWithMux(t *testing.T) {
 	err = json.NewDecoder(resp.Body).Decode(&receivedData)
 	assert.NoError(t, err)
 	assert.Equal(t, testData, receivedData)
+}
+
+func TestServerStartFailure_PortInUse(t *testing.T) {
+	server1 := setupTestServer(t, 8083)
+	go server1.Serve()
+	defer server1.Shutdown()
+
+	time.Sleep(100 * time.Millisecond)
+
+	server2 := setupTestServer(t, 8083)
+	err := make(chan error, 1)
+
+	go func() {
+		err <- server2.Serve()
+	}()
+
+	select {
+	case err := <-err:
+		assert.Error(t, err)
+	case <-time.After(2 * time.Second):
+	}
 }

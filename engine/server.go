@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ type ServerOpts struct {
 	IdleTimeout                  time.Duration // Timeout for idle connections
 	DisableGeneralOptionsHandler bool          // Whether to disable the default OPTIONS handler
 	UseColorizedLogger           bool          // Whether to use a colorized console logger
+	ShutdownTimeout              time.Duration
 }
 
 // Server represents an HTTP server with support for TLS and graceful shutdown.
@@ -45,6 +47,7 @@ type Server struct {
 	ExternalLogger  zerolog.Logger // External logger for server events
 	ColorizedLogger zerolog.Logger // Colorized console logger (used if enabled)
 	Mux             http.Handler   // HTTP request multiplexer
+	shutdownOnce    sync.Once
 }
 
 // NewServer creates a new Server instance with the specified configuration.
@@ -63,7 +66,27 @@ type Server struct {
 // Returns:
 //   - A pointer to a new Server instance.
 func NewServer(
-	serverName string, address int, logger io.Writer, tlsDir string, opts ServerOpts) *Server {
+	serverName string, address int, logger io.Writer, tlsDir string, opts ServerOpts) (*Server, error) {
+
+	if serverName == "" {
+		return nil, fmt.Errorf("serverName cannot be empty")
+	}
+
+	if address < 1 || address > 65535 {
+		return nil, fmt.Errorf("address must be between 1-65535, got %d", address)
+	}
+
+	if logger == nil {
+		return nil, fmt.Errorf("logger cannot be nil")
+	}
+
+	if opts.EnableTls && tlsDir == "" {
+		return nil, fmt.Errorf("tlsDir required when EnableTls is true")
+	}
+
+	if opts.MaxHeaderBytes < 0 {
+		return nil, fmt.Errorf("MaxHeaderBytes cannot be negative")
+	}
 
 	server := &Server{
 		ServerName:      serverName,
@@ -90,7 +113,7 @@ func NewServer(
 		server.ColorizedLogger = zerolog.New(colorizedLogger).With().Timestamp().Logger()
 	}
 
-	return server
+	return server, nil
 }
 
 // Serve starts the HTTP server and listens for incoming requests.
@@ -101,7 +124,7 @@ func NewServer(
 // listens for shutdown signals (SIGINT, SIGTERM). On receiving a signal, it performs a graceful
 // shutdown with a 10-second timeout. Errors during startup or shutdown are logged using the
 // configured logger (colorized if enabled).
-func (s *Server) Serve() {
+func (s *Server) Serve() error {
 	logger := s.ColorizedLogger
 	if !s.Opts.UseColorizedLogger {
 		logger = s.ExternalLogger
@@ -118,50 +141,77 @@ func (s *Server) Serve() {
 		certificates, err := collectTlsCertificates(s.TlsConfigDir)
 		if err != nil {
 			logger.Error().Msgf("error occurred loading tls certificate: %v", err)
+			panic(fmt.Sprintf("TLS certificate loading failed: %v", err))
 		}
 
 		s.server.TLSConfig = &tls.Config{
 			Certificates:       certificates,
 			InsecureSkipVerify: false,
 			ClientAuth:         tls.VerifyClientCertIfGiven,
+			MinVersion:         tls.VersionTLS12,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			},
+			PreferServerCipherSuites: true,
+			CurvePreferences: []tls.CurveID{
+				tls.CurveP256,
+				tls.X25519,
+			},
 		}
 	}
 
 	signal.Notify(s.shutdownChannel, syscall.SIGINT, syscall.SIGTERM)
 
+	errChan := make(chan error, 1)
+
 	go func(s *Server, logger zerolog.Logger) {
 		logger.Info().Msgf("Starting server on %v", s.server.Addr)
+		var err error
 		if !s.Opts.EnableTls {
-			err := s.server.ListenAndServe()
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error().Msg("Could not start server engine")
-			}
+			err = s.server.ListenAndServe()
 		} else {
-			err := s.server.ListenAndServeTLS("", "")
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error().Msg("Could not start server engine")
-			}
+			err = s.server.ListenAndServeTLS("", "")
+		}
+
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errChan <- fmt.Errorf("server start failed: %w", err)
 		}
 	}(s, logger)
 
-	sig := <-s.shutdownChannel
-	logger.Info().Msgf("=> Caught %v", sig.String())
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := s.server.Shutdown(ctx); err != nil {
-		logger.Error().Msgf("Could not shutdown server properly: %v", err)
+	timeout := s.Opts.ShutdownTimeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
 	}
 
-	<-ctx.Done()
-	logger.Info().Msg("Server terminated successfully")
+	select {
+	case err := <-errChan:
+		return err
+	case sig := <-s.shutdownChannel:
+		logger.Info().Msgf("=> Caught %v", sig.String())
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		if err := s.server.Shutdown(ctx); err != nil {
+			logger.Error().Msgf("Could not shutdown server properly: %v", err)
+			return err
+		}
+
+		<-ctx.Done()
+		logger.Info().Msg("Server terminated successfully")
+	}
+	return nil
 }
 
 // Shutdown initiates a graceful shutdown of the server by sending a SIGTERM signal.
 //
 // It triggers the server's shutdown process, which is handled by the Serve method.
 func (s *Server) Shutdown() {
-	s.shutdownChannel <- syscall.SIGTERM
+	s.shutdownOnce.Do(func() {
+		s.shutdownChannel <- syscall.SIGTERM
+	})
 }
 
 // collectTlsCertificates loads TLS certificate and key pairs from the specified directory.
@@ -204,13 +254,23 @@ func collectTlsCertificates(directory string) ([]tls.Certificate, error) {
 		return nil, fmt.Errorf("error walking directory: %w", err)
 	}
 
+	var missingKeys []string
 	certificates := make([]tls.Certificate, 0, len(certFiles))
+
+	for certName := range certFiles {
+		keyName := strings.TrimSuffix(certName, ".cert") + ".key"
+		if _, ok := keyFiles[keyName]; !ok {
+			missingKeys = append(missingKeys, certName)
+		}
+	}
+
+	if len(missingKeys) > 0 {
+		return nil, fmt.Errorf("missing keys for certificates: %v", missingKeys)
+	}
+
 	for certName, certPath := range certFiles {
 		keyName := strings.TrimSuffix(certName, ".cert") + ".key"
-		keyPath, ok := keyFiles[keyName]
-		if !ok {
-			return nil, fmt.Errorf("missing key for certificate: %s", certName)
-		}
+		keyPath := keyFiles[keyName]
 
 		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 		if err != nil {
