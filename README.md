@@ -1,4 +1,3 @@
-<img width="100" height="100" alt="ChatGPT Image Sep 15, 2025, 10_01_42 PM" src="https://github.com/user-attachments/assets/a963fa76-7fbd-4290-ab63-4cb19442c5c8" />
 
 # Hercules Distributed File System
 
@@ -28,7 +27,7 @@
 
 Hercules is a distributed file system that faithfully implements the Google File System (GFS) design described in the seminal 2003 paper. Built entirely in **Go**, it provides a scalable, fault-tolerant storage solution for large-scale data with focus on high throughput and availability.
 
-<img width="1920" height="1080" alt="Hercules Architecture" src="https://github.com/user-attachments/assets/c5e24b1f-0478-4415-a608-f897ebf8b5fa" />
+https://github.com/user-attachments/assets/5cb81239-33ed-4429-a654-c5fa508730fc
 
 ### Why Hercules?
 
@@ -449,6 +448,7 @@ Special thanks to:
 [⬆ Back to Top](#hercules-distributed-file-system)
 
 </div>
+
 
 
 
