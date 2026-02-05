@@ -2,14 +2,14 @@ package utils
 
 import "sync"
 
-type BQueue[T comparable] struct {
+type BQueue[T any] struct {
 	mu       sync.Mutex
 	c        sync.Cond
 	data     []T
 	capacity int
 }
 
-func NewBlockingQueue[T comparable](capacity int) *BQueue[T] {
+func NewBlockingQueue[T any](capacity int) *BQueue[T] {
 	q := new(BQueue[T])
 	q.c = sync.Cond{L: &q.mu}
 	q.capacity = capacity

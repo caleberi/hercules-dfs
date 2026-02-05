@@ -21,7 +21,7 @@ func TestBlockingQueue(t *testing.T) {
 	}(items)
 
 	go func(d int) {
-		for i := 0; i < d; i++ {
+		for range d {
 			item := bq.Take()
 			time.Sleep(100 * time.Millisecond)
 			results = append(results, item)

@@ -151,7 +151,7 @@ func ZipSlices[T, U any](slice1 []T, slice2 []U) [][2]any {
 
 func Sum(slice []float64) float64 {
 	total := 0.0
-	for i := 0; i < len(slice); i++ {
+	for i := range slice {
 		total += slice[i]
 	}
 	return total

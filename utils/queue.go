@@ -21,8 +21,8 @@ type Deque[T any] struct {
 }
 
 func (qs *Deque[T]) Length() int64 {
-	qs.mu.Lock()
-	defer qs.mu.Unlock()
+	qs.mu.RLock()
+	defer qs.mu.RUnlock()
 	return qs.length
 }
 
@@ -127,9 +127,12 @@ func (qs *Deque[T]) PopAll() []T {
 }
 
 func (qs *Deque[T]) Print(w io.Writer) {
+	qs.mu.RLock()
+	defer qs.mu.RUnlock()
+
 	buffer := bytes.NewBufferString("")
 	for current := qs.head; current != nil; current = current.next {
-		buffer.WriteString(fmt.Sprintf("%v ->", current.data))
+		fmt.Fprintf(buffer, "%v ->", current.data)
 	}
 	buffer.WriteString("nil \n")
 	w.Write(buffer.Bytes())
