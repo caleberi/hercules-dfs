@@ -10,34 +10,34 @@ import (
 func TestQueueInFIFOSequence(t *testing.T) {
 	type testcase struct {
 		name  string
-		input []interface{}
-		want  []interface{}
+		input []any
+		want  []any
 	}
 	testcases := []testcase{
 		{
 			name: "integer queue",
-			input: []interface{}{
+			input: []any{
 				1, 3, 4, 5, 45, 234, 45, 34, 3,
 			},
-			want: []interface{}{
+			want: []any{
 				1, 3, 4, 5, 45, 234, 45, 34, 3,
 			},
 		},
 		{
 			name: "string queue",
-			input: []interface{}{
+			input: []any{
 				'1', "3", "4", "5", "45", "234", "45", "34", "3",
 			},
-			want: []interface{}{
+			want: []any{
 				'1', "3", "4", "5", "45", "234", "45", "34", "3",
 			},
 		},
 		{
 			name: "boolean queue",
-			input: []interface{}{
+			input: []any{
 				true, false, true, false, false, true,
 			},
-			want: []interface{}{
+			want: []any{
 				true, false, true, false, false, true,
 			},
 		},
@@ -45,8 +45,8 @@ func TestQueueInFIFOSequence(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			queue := Deque[interface{}]{}
-			ret := []interface{}{}
+			queue := Deque[any]{}
+			ret := []any{}
 			for _, v := range tc.input {
 				queue.PushBack(v)
 			}

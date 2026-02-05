@@ -13,6 +13,15 @@ type Node[T any] struct {
 	prev *Node[T]
 }
 
+// Deque is a thread-safe double-ended queue supporting O(1) insertion
+// and removal at both ends. It is safe for concurrent use by multiple
+// goroutines.
+//
+// Example:
+//
+//	queue := Deque[int]{}
+//	queue.PushBack(10)
+//	val := queue.PopFront()
 type Deque[T any] struct {
 	mu     sync.RWMutex // for synchroncize access to queue
 	head   *Node[T]
@@ -118,7 +127,7 @@ func (qs *Deque[T]) PopBack() T {
 	return node.data
 }
 
-func (qs *Deque[T]) PopAll() []T {
+func (qs *Deque[T]) PopAllReverse() []T {
 	var ret []T
 	for qs.Length() != 0 {
 		ret = append(ret, qs.PopBack())
@@ -136,4 +145,10 @@ func (qs *Deque[T]) Print(w io.Writer) {
 	}
 	buffer.WriteString("nil \n")
 	w.Write(buffer.Bytes())
+}
+
+func (qs *Deque[T]) IsEmpty() bool {
+	qs.mu.RLock()
+	defer qs.mu.RUnlock()
+	return qs.length == 0
 }

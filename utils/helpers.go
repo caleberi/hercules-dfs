@@ -4,31 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
+	"strings"
 
 	"github.com/caleberi/distributed-system/common"
 )
-
-func Map[T, V comparable](data []T, fn func(v T) V) []V {
-	result := []V{}
-	for _, dt := range data {
-		result = append(result, fn(dt))
-	}
-	return result
-}
-
-func ForEach[T any](data []T, fn func(v T)) {
-	for _, dt := range data {
-		fn(dt)
-	}
-}
-
-func LoopOverMap[T comparable, V comparable](data map[T]V, fn func(k T, V V)) {
-	for k, v := range data {
-		fn(k, v)
-	}
-}
 
 func ExtractFromMap[K, V comparable](data, result map[K]V, fn func(value V) bool) {
 	for k, v := range data {
@@ -36,16 +16,6 @@ func ExtractFromMap[K, V comparable](data, result map[K]V, fn func(value V) bool
 			result[k] = v
 		}
 	}
-}
-
-func Filter[T comparable](data []T, fn func(v T) bool) []T {
-	result := []T{}
-	for _, dt := range data {
-		if fn(dt) {
-			result = append(result, dt)
-		}
-	}
-	return result
 }
 
 // TransformSlice applies a transformation function to each element of a slice
@@ -136,15 +106,17 @@ func ChunkSlice[T any](slice []T, chunkSize int) [][]T {
 	return chunks
 }
 
+type Pair[T, U any] struct {
+	First  T
+	Second U
+}
+
 // ZipSlices combines elements from two slices into pairs
-func ZipSlices[T, U any](slice1 []T, slice2 []U) [][2]any {
-	minLen := len(slice1)
-	if len(slice2) < minLen {
-		minLen = len(slice2)
-	}
-	result := make([][2]any, minLen)
-	for i := 0; i < minLen; i++ {
-		result[i] = [2]any{slice1[i], slice2[i]}
+func ZipSlices[T, U any](slice1 []T, slice2 []U) []Pair[T, U] {
+	minLen := min(len(slice1), len(slice2))
+	result := make([]Pair[T, U], minLen)
+	for i := range minLen {
+		result[i] = Pair[T, U]{First: slice1[i], Second: slice2[i]}
 	}
 	return result
 }
@@ -175,8 +147,23 @@ func ComputeChecksum(content string) string {
 // It returns an error if the filename is empty or a reserved name like "." or "..".
 func ValidateFilename(filename string, path common.Path) error {
 	if filename == "" || filename == "." || filename == ".." {
-		return fmt.Errorf("invalid filename %q for path %s: reserved or empty name", filename, path)
+		return fmt.Errorf("invalid filename %q: reserved name", filename)
 	}
+
+	if strings.ContainsAny(filename, "/\\") {
+		return fmt.Errorf("invalid filename %q: contains path separator", filename)
+	}
+
+	if strings.Contains(filename, "\x00") {
+		return fmt.Errorf("invalid filename %q: contains null byte", filename)
+	}
+
+	for _, r := range filename {
+		if r < 32 {
+			return fmt.Errorf("invalid filename %q: contains control character", filename)
+		}
+	}
+
 	return nil
 }
 
@@ -191,9 +178,6 @@ func ValidateFilename(filename string, path common.Path) error {
 // Returns:
 //   - A float64 representing the number of megabytes.
 //   - An error if the input is too large (unlikely with uint64).
-func BToMb(b uint64) (float64, error) {
-	if b > math.MaxUint64/1024/1024 {
-		return 0.0, fmt.Errorf("input too large: %d", b)
-	}
-	return float64(b) / (1024 * 1024), nil
+func BToMb(b uint64) float64 {
+	return float64(b) / (1024 * 1024)
 }
