@@ -18,8 +18,8 @@ const filePerm = 0777
 // FileSystem provides thread-safe operations for managing files and directories
 // relative to a root path.
 type FileSystem struct {
-	mu   sync.Mutex // synchronizes file system operations
-	root string     // base path for all file operations
+	mu   sync.RWMutex // synchronizes file system operations
+	root string       // base path for all file operations
 }
 
 // NewFileSystem creates a new FileSystem instance with the specified root path.
@@ -120,8 +120,8 @@ func (fs *FileSystem) RemoveDir(path string) error {
 //   - fs.FileInfo: Information about the file or directory.
 //   - error: An error if the path does not exist or cannot be accessed.
 func (fs *FileSystem) GetStat(path string) (fs.FileInfo, error) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
 
 	path, err := fs.restrictToRoot(path)
 	if err != nil {
@@ -225,8 +225,8 @@ func (fs *FileSystem) CreateFile(path string) error {
 //   - error: An error if the path does not exist, is not a file, or cannot be
 //     opened.
 func (fs *FileSystem) GetFile(path string, flag int, mode os.FileMode) (*os.File, error) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
 
 	path, err := fs.restrictToRoot(path)
 	if err != nil {
