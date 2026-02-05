@@ -154,7 +154,7 @@ func main() {
 	default:
 		log.Info().Msgf("Starting GatewayServer on :%d", cfg.GatewayAddress)
 		client := hercules.NewHerculesClient(ctx, cfg.MasterAddress, 5*time.Minute)
-		server := gateway.NewHerculesHTTPGateway(
+		server, err := gateway.NewHerculesHTTPGateway(
 			ctx, client,
 			gateway.GatewayConfig{
 				ServerName:     "Gateway",
@@ -167,6 +167,10 @@ func main() {
 				ReadTimeout:    15 * time.Second,
 				WriteTimeout:   30 * time.Second,
 			})
+		if err != nil {
+			log.Err(err).Msg("Error starting server")
+			os.Exit(1)
+		}
 		server.Start()
 		go func() {
 			<-quit
