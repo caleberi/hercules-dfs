@@ -325,7 +325,7 @@ func (fd *FailureDetector) PredictFailure() (Prediction, error) {
 		return entries[i].Eta.Before(entries[j].Eta)
 	})
 
-	arrivalTimes := utils.Map(entries, func(entry Entry) float64 {
+	arrivalTimes := utils.TransformSlice(entries, func(entry Entry) float64 {
 		return float64(entry.Eta.UnixMilli())
 	})
 
@@ -340,7 +340,7 @@ func (fd *FailureDetector) PredictFailure() (Prediction, error) {
 
 	mean := utils.Sum(intervals) / float64(len(intervals))
 	variance := 0.0
-	utils.ForEach(intervals, func(v float64) {
+	utils.ForEachInSlice(intervals, func(v float64) {
 		variance += math.Pow(v-mean, 2)
 	})
 	variance /= float64(len(intervals))
