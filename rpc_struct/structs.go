@@ -4,10 +4,10 @@ import (
 	"time"
 
 	"github.com/caleberi/distributed-system/common"
-	failuredetector "github.com/caleberi/distributed-system/failure_detector"
+	detector "github.com/caleberi/distributed-system/detector"
 )
 
-type HeartBeatArg struct {
+type HeartBeatArgs struct {
 	Address       common.ServerAddr
 	PendingLeases []*common.Lease
 	MachineInfo   common.MachineInfo
@@ -17,16 +17,16 @@ type HeartBeatReply struct {
 	LastHeartBeat   time.Time
 	LeaseExtensions []*common.Lease
 	Garbage         []common.ChunkHandle
-	NetworkData     failuredetector.NetworkData
+	NetworkData     detector.NetworkData
 }
 
-type SysReportInfoArg struct{}
+type SysReportInfoArgs struct{}
 type SysReportInfoReply struct {
 	SysMem common.Memory
 	Chunks []common.PersistedChunkInfo
 }
 
-type CheckChunkVersionArg struct {
+type CheckChunkVersionArgs struct {
 	Handle  common.ChunkHandle
 	Version common.ChunkVersion
 }
@@ -200,3 +200,11 @@ type GrantLeaseInfoArgs struct {
 
 type GrantLeaseInfoReply struct {
 }
+
+type UpdateFileMetadataArgs struct {
+	Path   common.Path
+	Length int64
+	Chunks int64
+}
+
+type UpdateFileMetadataReply struct{}
