@@ -148,26 +148,34 @@ type MakeDirectoryArgs struct {
 	Path common.Path
 }
 
-type MakeDirectoryReply struct{}
+type MakeDirectoryReply struct {
+	ErrorCode common.ErrorCode
+}
 
 type RenameFileArgs struct {
 	Source common.Path
 	Target common.Path
 }
 
-type RenameFileReply struct{}
+type RenameFileReply struct {
+	ErrorCode common.ErrorCode
+}
 
 type CreateFileArgs struct {
 	Path common.Path
 }
-type CreateFileReply struct{}
+type CreateFileReply struct {
+	ErrorCode common.ErrorCode
+}
 
 type DeleteFileArgs struct {
 	Path         common.Path
 	DeleteHandle bool
 }
 
-type DeleteFileReply struct{}
+type DeleteFileReply struct {
+	ErrorCode common.ErrorCode
+}
 
 type GetFileInfoArgs struct {
 	Path common.Path
@@ -186,10 +194,6 @@ type RetrieveReplicasReply struct {
 	Locations []common.ServerAddr
 }
 
-type GetPathInfoArg struct {
-	Handle common.ChunkHandle
-}
-
 type GrantLeaseInfoArgs struct {
 	Handle      common.ChunkHandle
 	Expire      time.Time
@@ -199,6 +203,7 @@ type GrantLeaseInfoArgs struct {
 }
 
 type GrantLeaseInfoReply struct {
+	ErrorCode common.ErrorCode
 }
 
 type UpdateFileMetadataArgs struct {
@@ -207,4 +212,6 @@ type UpdateFileMetadataArgs struct {
 	Chunks int64
 }
 
-type UpdateFileMetadataReply struct{}
+type UpdateFileMetadataReply struct {
+	ErrorCode common.ErrorCode
+}
