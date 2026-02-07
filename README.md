@@ -1,6 +1,6 @@
 
 # Hercules Distributed File System
-
+> I have not done my benchmarks personally since I am still fixing bugs and taking time to review my decisions, but It works overall. The documentation was done via LLM, so I will be editing it poco a poco
 > A production-grade implementation of the **Google File System (GFS)** in Go
 
 [![Go Version](https://img.shields.io/badge/Go-1.18+-00ADD8?style=flat&logo=go)](https://golang.org)
@@ -448,6 +448,7 @@ Special thanks to:
 [⬆ Back to Top](#hercules-distributed-file-system)
 
 </div>
+
 
 
 
