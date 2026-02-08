@@ -14,6 +14,7 @@ const (
 	PersistOpsLog     Event = "PersistOpsLog"
 	MasterHeartBeat   Event = "MasterHeartBeat"
 	Archival          Event = "Archival"
+	FailurePrediction Event = "FailurePrediction"
 )
 
 const (
@@ -46,12 +47,13 @@ const (
 	ServerHealthCheckInterval time.Duration = 10 * time.Second
 	MasterPersistMetaInterval time.Duration = 15 * time.Hour
 	ServerHealthCheckTimeout  time.Duration = 60 * time.Second
+	FailurePredictionInterval time.Duration = 10 * time.Second
 	MasterMetaDataFileName                  = "master.server.meta"
 
 	// replicationFactor
 	MinimumReplicationFactor = 3
 
-	LeaseTimeout = 60 * time.Second
+	LeaseTimeout = 120 * time.Second
 
 	// file constant
 	FileMode = 0755

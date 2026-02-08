@@ -22,6 +22,7 @@ const (
 	ReadEOF
 	NotAvailableForCopy
 	DownloadBufferMiss
+	LeaseExpired
 )
 
 type Error struct {
