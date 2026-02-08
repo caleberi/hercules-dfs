@@ -10,12 +10,12 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: master_server
-    image: hercules-master:latest
     container_name: hercules-master
     hostname: master
     environment:
       SERVER_TYPE: master_server
       SERVER_ADDRESS: 0.0.0.0:9090
+      REDIS_ADDR: redis:6379
       ROOT_DIR: ./data/master
       LOG_LEVEL: info
     ports:
@@ -28,6 +28,9 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "0:0"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "9090"]
       interval: 30s
@@ -42,7 +45,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: chunk_server
-    image: hercules-chunkserver:latest
     container_name: hercules-chunkserver1
     hostname: chunkserver1
     environment:
@@ -83,7 +85,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: chunk_server
-    image: hercules-chunkserver:latest
     container_name: hercules-chunkserver2
     hostname: chunkserver2
     environment:
@@ -124,7 +125,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: chunk_server
-    image: hercules-chunkserver:latest
     container_name: hercules-chunkserver3
     hostname: chunkserver3
     environment:
@@ -165,7 +165,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: chunk_server
-    image: hercules-chunkserver:latest
     container_name: hercules-chunkserver4
     hostname: chunkserver4
     environment:
@@ -206,7 +205,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: chunk_server
-    image: hercules-chunkserver:latest
     container_name: hercules-chunkserver5
     hostname: chunkserver5
     environment:
@@ -266,7 +264,6 @@ services:
       dockerfile: Dockerfile
       args:
         SERVER_TYPE: gateway_server
-    image: hercules-gateway:latest
     container_name: hercules-gateway
     hostname: gateway
     environment:
