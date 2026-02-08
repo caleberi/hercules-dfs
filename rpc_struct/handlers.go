@@ -7,6 +7,7 @@ const (
 	MRPCMkdirHandler                             = "MasterServer.RPCMkdirHandler"
 	MRPCCreateFileHandler                        = "MasterServer.RPCCreateFileHandler"
 	MRPCDeleteFileHandler                        = "MasterServer.RPCDeleteFileHandler"
+	MRPCRemoveDirHandler                         = "MasterServer.RPCRemoveDirHandler"
 	MRPCRenameHandler                            = "MasterServer.RPCRenameHandler"
 	MRPCGetFileInfoHandler                       = "MasterServer.RPCGetFileInfoHandler"
 	MRPCGetReplicasHandler                       = "MasterServer.RPCGetReplicasHandler"
@@ -24,4 +25,5 @@ const (
 	CRPCApplyCopyHandler         = "ChunkServer.RPCApplyCopyHandler"
 	CRPCGetSnapshotHandler       = "ChunkServer.RPCGetSnapshotHandler"
 	CRPCGrantLeaseHandler        = "ChunkServer.RPCGrantLeaseHandler"
+	CRPCHeartBeatHandler         = "ChunkServer.RPCHeartBeatHandler"
 )

@@ -12,12 +12,21 @@ type HeartBeatArgs struct {
 	PendingLeases []*common.Lease
 	MachineInfo   common.MachineInfo
 	ExtendLease   bool
+	NetworkData   detector.NetworkData
 }
 type HeartBeatReply struct {
 	LastHeartBeat   time.Time
 	LeaseExtensions []*common.Lease
 	Garbage         []common.ChunkHandle
 	NetworkData     detector.NetworkData
+}
+
+type ChunkServerHeartBeatArgs struct {
+	NetworkData detector.NetworkData
+}
+
+type ChunkServerHeartBeatReply struct {
+	NetworkData detector.NetworkData
 }
 
 type SysReportInfoArgs struct{}
@@ -174,6 +183,14 @@ type DeleteFileArgs struct {
 }
 
 type DeleteFileReply struct {
+	ErrorCode common.ErrorCode
+}
+
+type RemoveDirArgs struct {
+	Path common.Path
+}
+
+type RemoveDirReply struct {
 	ErrorCode common.ErrorCode
 }
 
