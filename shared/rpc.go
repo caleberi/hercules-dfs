@@ -56,7 +56,7 @@ func calculateBackoff(attempt int, baseDelay time.Duration) time.Duration {
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func UnicastToRPCServer(addr string, method string, args any, reply any, config RetryConfig) error {
+func UnicastToRPCServer[T, V any](addr string, method string, args T, reply V, config RetryConfig) error {
 	var err error
 	for attempt := 1; attempt <= config.MaxRetries; attempt++ {
 		client, dialErr := rpc.Dial("tcp", addr)
@@ -94,7 +94,7 @@ type BroadcastError struct {
 }
 
 // BroadcastToRPCServers sends an RPC request to multiple servers concurrently.
-func BroadcastToRPCServers(addrs []string, method string, args any, replies []any, config RetryConfig) []error {
+func BroadcastToRPCServers[T, V any](addrs []string, method string, args T, replies []V, config RetryConfig) []error {
 	var (
 		wg    sync.WaitGroup
 		errs  []BroadcastError

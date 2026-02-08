@@ -10,12 +10,14 @@ import (
 	"github.com/caleberi/distributed-system/common"
 )
 
-func ExtractFromMap[K, V comparable](data, result map[K]V, fn func(value V) bool) {
+func ExtractFromMap[K, V comparable](data map[K]V, fn func(value V) bool) map[K]V {
+	result := make(map[K]V)
 	for k, v := range data {
 		if fn(v) {
 			result[k] = v
 		}
 	}
+	return result
 }
 
 // TransformSlice applies a transformation function to each element of a slice
