@@ -100,7 +100,9 @@ func (hercules *HerculesClient) GetChunkServers(handle common.ChunkHandle) (*com
 
 	err := shared.UnicastToRPCServer(
 		string(hercules.master), rpc_struct.MRPCGetPrimaryAndSecondaryServersInfoHandler,
-		rpc_struct.PrimaryAndSecondaryServersInfoArg{Handle: handle}, &primaryAndSecondaryServersReply,
+		rpc_struct.PrimaryAndSecondaryServersInfoArg{Handle: handle},
+		&primaryAndSecondaryServersReply,
+		shared.DefaultRetryConfig,
 	)
 	if err != nil {
 		return nil, err
@@ -140,7 +142,13 @@ func (hercules *HerculesClient) ObtainLease(handle common.ChunkHandle, offset co
 	lease, exists := hercules.cache[handle]
 	if exists {
 		hercules.cacheMux.RUnlock()
-		return lease, 0, nil
+		if !lease.IsExpired(time.Now()) {
+			return lease, 0, nil
+		}
+		hercules.cacheMux.Lock()
+		delete(hercules.cache, handle)
+		hercules.cacheMux.Unlock()
+		lease = nil
 	}
 	hercules.cacheMux.RUnlock()
 
@@ -167,7 +175,7 @@ func (hercules *HerculesClient) ObtainLease(handle common.ChunkHandle, offset co
 func (hercules *HerculesClient) GetChunkHandle(path common.Path, offset common.ChunkIndex) (common.ChunkHandle, error) {
 	var reply rpc_struct.GetChunkHandleReply
 	err := shared.UnicastToRPCServer(string(hercules.master),
-		rpc_struct.MRPCGetChunkHandleHandler, rpc_struct.GetChunkHandleArgs{Path: path, Index: offset}, &reply)
+		rpc_struct.MRPCGetChunkHandleHandler, rpc_struct.GetChunkHandleArgs{Path: path, Index: offset}, &reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return -1, err
 	}
@@ -187,7 +195,7 @@ func (hercules *HerculesClient) MkDir(path common.Path) error {
 	return shared.UnicastToRPCServer(
 		string(hercules.master),
 		rpc_struct.MRPCMkdirHandler,
-		rpc_struct.MakeDirectoryArgs{Path: path}, reply)
+		rpc_struct.MakeDirectoryArgs{Path: path}, reply, shared.DefaultRetryConfig)
 }
 
 // CreateFile creates a file at the specified path.
@@ -203,7 +211,7 @@ func (hercules *HerculesClient) CreateFile(path common.Path) error {
 	return shared.UnicastToRPCServer(
 		string(hercules.master),
 		rpc_struct.MRPCCreateFileHandler,
-		rpc_struct.CreateFileArgs{Path: path}, reply)
+		rpc_struct.CreateFileArgs{Path: path}, reply, shared.DefaultRetryConfig)
 }
 
 // List retrieves the list of file or directory entries at the specified path.
@@ -217,7 +225,7 @@ func (hercules *HerculesClient) CreateFile(path common.Path) error {
 //   - An error if the RPC call fails.
 func (hercules *HerculesClient) List(path common.Path) ([]common.PathInfo, error) {
 	reply := &rpc_struct.GetPathInfoReply{}
-	err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCListHandler, rpc_struct.GetPathInfoArgs{}, reply)
+	err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCListHandler, rpc_struct.GetPathInfoArgs{}, reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +244,16 @@ func (hercules *HerculesClient) DeleteFile(path common.Path, deleteHandle bool) 
 	reply := &rpc_struct.DeleteFileReply{}
 	return shared.UnicastToRPCServer(
 		string(hercules.master), rpc_struct.MRPCDeleteFileHandler,
-		rpc_struct.DeleteFileArgs{Path: path, DeleteHandle: deleteHandle}, reply)
+		rpc_struct.DeleteFileArgs{Path: path, DeleteHandle: deleteHandle}, reply, shared.DefaultRetryConfig)
+}
+
+// RemoveDir deletes a directory at the specified path.
+// It sends an RPC request to the master server to remove the directory entry.
+func (hercules *HerculesClient) RemoveDir(path common.Path) error {
+	reply := &rpc_struct.RemoveDirReply{}
+	return shared.UnicastToRPCServer(
+		string(hercules.master), rpc_struct.MRPCRemoveDirHandler,
+		rpc_struct.RemoveDirArgs{Path: path}, reply, shared.DefaultRetryConfig)
 }
 
 // RenameFile renames a file from the source path to the target path.
@@ -251,7 +268,7 @@ func (hercules *HerculesClient) DeleteFile(path common.Path, deleteHandle bool) 
 func (hercules *HerculesClient) RenameFile(source, target common.Path) error {
 	reply := &rpc_struct.RenameFileReply{}
 	return shared.UnicastToRPCServer(
-		string(hercules.master), rpc_struct.MRPCRenameHandler, rpc_struct.RenameFileArgs{Source: source, Target: target}, reply)
+		string(hercules.master), rpc_struct.MRPCRenameHandler, rpc_struct.RenameFileArgs{Source: source, Target: target}, reply, shared.DefaultRetryConfig)
 }
 
 // GetFile retrieves the file information for the specified path.
@@ -267,7 +284,7 @@ func (hercules *HerculesClient) GetFile(path common.Path) (*common.FileInfo, err
 	reply := &rpc_struct.GetFileInfoReply{}
 	err := shared.UnicastToRPCServer(
 		string(hercules.master),
-		rpc_struct.MRPCGetFileInfoHandler, rpc_struct.GetFileInfoArgs{Path: path}, reply)
+		rpc_struct.MRPCGetFileInfoHandler, rpc_struct.GetFileInfoArgs{Path: path}, reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +310,7 @@ func (hercules *HerculesClient) Read(path common.Path, offset common.Offset, dat
 
 	args := rpc_struct.GetFileInfoArgs{Path: path}
 	reply := &rpc_struct.GetFileInfoReply{}
-	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, reply)
+	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return -1, err
 	}
@@ -369,7 +386,7 @@ func (hercules *HerculesClient) ReadChunk(handle common.ChunkHandle, offset comm
 	err := shared.UnicastToRPCServer(
 		string(hercules.master),
 		rpc_struct.MRPCGetReplicasHandler,
-		replicasArgs, &replicasReply)
+		replicasArgs, &replicasReply, shared.DefaultRetryConfig)
 	if err != nil {
 		log.Err(err).Stack().Msg(err.Error())
 		return 0, common.Error{Code: common.UnknownError, Err: err.Error()}
@@ -394,7 +411,7 @@ func (hercules *HerculesClient) ReadChunk(handle common.ChunkHandle, offset comm
 		string(chosenReadServer),
 		rpc_struct.CRPCReadChunkHandler,
 		readChunkArg,
-		&readChunkReply)
+		&readChunkReply, shared.DefaultRetryConfig)
 
 	if err != nil {
 		return 0, common.Error{Code: common.UnknownError, Err: err.Error()}
@@ -424,7 +441,7 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 
 	args := rpc_struct.GetFileInfoArgs{Path: path}
 	reply := rpc_struct.GetFileInfoReply{}
-	if err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, &reply); err != nil {
+	if err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, &reply, shared.DefaultRetryConfig); err != nil {
 		return -1, err
 	}
 
@@ -437,6 +454,7 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 	}
 
 	pos := 0
+	startOffset := offset
 	for pos < len(data) {
 		index := common.Offset(offset / common.ChunkMaxSizeInByte)
 		chunkOffset := offset % common.ChunkMaxSizeInByte
@@ -460,6 +478,21 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 		pos += n
 		if pos == len(data) {
 			break
+		}
+	}
+
+	newLength := startOffset + common.Offset(len(data))
+	newChunks := int64((offset-1)/common.ChunkMaxSizeInByte + 1)
+	if newLength > common.Offset(reply.Length) {
+		updateArgs := rpc_struct.UpdateFileMetadataArgs{
+			Path:   path,
+			Length: int64(newLength),
+			Chunks: newChunks,
+		}
+		updateReply := rpc_struct.UpdateFileMetadataReply{}
+		err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCUpdateFileMetadataHandler, updateArgs, &updateReply, shared.DefaultRetryConfig)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to update file metadata for %s, but write succeeded", path)
 		}
 	}
 
@@ -489,7 +522,7 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 		return -1, err
 	}
 	servers := append(writeLease.Secondaries, writeLease.Primary)
-	copy(utils.Filter(servers, func(v common.ServerAddr) bool { return string(v) != "" }), servers)
+	copy(utils.FilterSlice(servers, func(v common.ServerAddr) bool { return string(v) != "" }), servers)
 	if len(servers) == 0 {
 		return -1, common.Error{Code: common.UnknownError, Err: "no replica"}
 	}
@@ -502,17 +535,17 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 	dataID := downloadbuffer.NewDownloadBufferId(handle)
 
 	var errs []string
-	utils.ForEach(servers, func(addr common.ServerAddr) {
+	utils.ForEachInSlice(servers, func(addr common.ServerAddr) {
 		var d rpc_struct.ForwardDataReply
 		if addr != "" {
-			replicas := utils.Filter(servers, func(v common.ServerAddr) bool { return v != addr })
+			replicas := utils.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
 			err = shared.UnicastToRPCServer(string(addr),
 				rpc_struct.CRPCForwardDataHandler,
 				rpc_struct.ForwardDataArgs{
 					DownloadBufferId: dataID,
 					Data:             data,
 					Replicas:         replicas,
-				}, &d)
+				}, &d, shared.DefaultRetryConfig)
 			if err != nil {
 				errs = append(errs, err.Error())
 			}
@@ -535,12 +568,19 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 		rpc_struct.CRPCWriteChunkHandler,
 		writeArgs,
 		writeReply,
+		shared.DefaultRetryConfig,
 	)
 	if err != nil {
 		return -1, err
 	}
+	if writeReply.ErrorCode == common.LeaseExpired {
+		hercules.cacheMux.Lock()
+		delete(hercules.cache, handle)
+		hercules.cacheMux.Unlock()
+		return -1, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
+	}
 
-	return writeReply.Length, err
+	return writeReply.Length, nil
 }
 
 // Append appends the given data to the end of the file at the specified path.
@@ -566,7 +606,7 @@ func (hercules *HerculesClient) Append(path common.Path, data []byte) (offset co
 	args := rpc_struct.GetFileInfoArgs{Path: path}
 	reply := rpc_struct.GetFileInfoReply{}
 
-	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, &reply)
+	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, &reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return -1, err
 	}
@@ -597,6 +637,19 @@ func (hercules *HerculesClient) Append(path common.Path, data []byte) (offset co
 		break
 	}
 	offset = common.Offset(start)*common.ChunkMaxSizeInByte + chunkOffset
+
+	newLength := offset + common.Offset(len(data))
+	newChunks := int64(start + 1)
+	updateArgs := rpc_struct.UpdateFileMetadataArgs{
+		Path:   path,
+		Length: int64(newLength),
+		Chunks: newChunks,
+	}
+	updateReply := rpc_struct.UpdateFileMetadataReply{}
+	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCUpdateFileMetadataHandler, updateArgs, &updateReply, shared.DefaultRetryConfig)
+	if err != nil {
+		log.Warn().Err(err).Msgf("Failed to update file metadata for %s, but append succeeded", path)
+	}
 	return
 }
 
@@ -644,7 +697,7 @@ func (hercules *HerculesClient) AppendChunk(handle common.ChunkHandle, data []by
 			DownloadBufferId: dataID,
 			Data:             data,
 			Replicas:         appendLease.Secondaries,
-		}, &forwardReply)
+		}, &forwardReply, shared.DefaultRetryConfig)
 	if err != nil {
 		return offset, err
 	}
@@ -655,7 +708,7 @@ func (hercules *HerculesClient) AppendChunk(handle common.ChunkHandle, data []by
 	appendReply := rpc_struct.AppendChunkReply{}
 	err = shared.UnicastToRPCServer(
 		string(appendLease.Primary),
-		rpc_struct.CRPCAppendChunkHandler, appendArgs, &appendReply)
+		rpc_struct.CRPCAppendChunkHandler, appendArgs, &appendReply, shared.DefaultRetryConfig)
 	if err != nil {
 		return offset, common.Error{Code: common.UnknownError, Err: err.Error()}
 	}

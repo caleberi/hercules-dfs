@@ -10,6 +10,7 @@ import (
 
 	"github.com/caleberi/distributed-system/chunkserver"
 	"github.com/caleberi/distributed-system/common"
+	failuredetector "github.com/caleberi/distributed-system/detector"
 	"github.com/caleberi/distributed-system/master_server"
 	"github.com/jaswdr/faker/v2"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +21,18 @@ func setupMasterServer(t *testing.T, ctx context.Context, root, address string) 
 	assert.NotEmpty(t, root)
 	assert.NotEmpty(t, address)
 
-	server := master_server.NewMasterServer(ctx, common.ServerAddr(address), root)
+	server := master_server.NewMasterServer(ctx, master_server.MasterServerConfig{
+		ServerAddress: common.ServerAddr(address),
+		RootDir:       root,
+
+		RedisAddr:       "localhost:6379",
+		EntryExpiryTime: 10 * time.Millisecond,
+		WindowSize:      100,
+		SuspicionLevel: failuredetector.SuspicionLevel{
+			AccumulationThreshold: 3.0,
+			UpperBoundThreshold:   8.0,
+		},
+	})
 	assert.NotNil(t, server)
 	return server
 }
