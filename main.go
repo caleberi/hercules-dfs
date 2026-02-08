@@ -22,13 +22,16 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
 	chunkserver "github.com/caleberi/distributed-system/chunkserver"
 	"github.com/caleberi/distributed-system/common"
+	failuredetector "github.com/caleberi/distributed-system/detector"
 	"github.com/caleberi/distributed-system/gateway"
 	"github.com/caleberi/distributed-system/hercules"
+	"github.com/caleberi/distributed-system/master_server"
 	masterserver "github.com/caleberi/distributed-system/master_server"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -51,11 +54,12 @@ type Config struct {
 }
 
 func parseConfig() (Config, error) {
+	gatewayAddr, _ := strconv.Atoi(os.Getenv("GATEWAY_ADDR"))
 	serverType := flag.String("ServerType", "chunk_server", "run as a particular server (default: chunk_server, master_server, gateway_server)")
-	serverAddress := flag.String("serverAddr", "127.0.0.1:8085", "server address to listen on (host:port)")
-	masterAddress := flag.String("masterAddr", "127.0.0.1:9090", "master server address (host:port)")
-	redisAddress := flag.String("redisAddr", "127.0.0.1:9090", "redis server address (host:port)")
-	gatewayAddress := flag.Int("gatewayAddr", 8089, "gateway http server address (host:port)")
+	serverAddress := flag.String("serverAddr", os.Getenv("SERVER_ADDRESS"), "server address to listen on (host:port)")
+	masterAddress := flag.String("masterAddr", os.Getenv("MASTER_ADDR"), "master server address (host:port)")
+	redisAddress := flag.String("redisAddr", os.Getenv("REDIS_ADDR"), "redis server address (host:port)")
+	gatewayAddress := flag.Int("gatewayAddr", gatewayAddr, "gateway http server address (host:port)")
 	rootDir := flag.String("rootDir", "mroot", "root directory for file system storage")
 	logLevel := flag.String("logLevel", "debug", "logging level (debug, info, warn, error)")
 
@@ -143,7 +147,18 @@ func main() {
 		<-ctx.Done()
 	case MasterServer:
 		log.Info().Msgf("Starting MasterServer on %s with root directory %s", cfg.ServerAddress, cfg.RootDir)
-		server := masterserver.NewMasterServer(ctx, cfg.ServerAddress, cfg.RootDir)
+		server := masterserver.NewMasterServer(ctx, master_server.MasterServerConfig{
+			ServerAddress: cfg.ServerAddress,
+			RootDir:       cfg.RootDir,
+
+			RedisAddr:       string(cfg.RedisAddress),
+			EntryExpiryTime: 10 * time.Millisecond,
+			WindowSize:      100,
+			SuspicionLevel: failuredetector.SuspicionLevel{
+				AccumulationThreshold: 3.0,
+				UpperBoundThreshold:   8.0,
+			},
+		})
 		go func() {
 			<-quit
 			log.Info().Msg("Received shutdown signal, stopping MasterServer...")
