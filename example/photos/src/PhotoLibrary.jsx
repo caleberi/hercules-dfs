@@ -5,6 +5,7 @@ const API_BASE = 'http://localhost:8089/api/v1';
 const CHUNK_SIZE = 64 * 1024 * 1024; // 64MB per chunk (matching common.ChunkMaxSizeInByte)
 const APPEND_MAX = 16 * 1024 * 1024; // 16MB max for append
 const MAX_TEXT_PREVIEW_BYTES = 200 * 1024;
+const LEASE_EXPIRED_CODE = 8;
 
 // Utility functions for file type detection
 const isVideoFile = (filename) => {
@@ -245,7 +246,7 @@ const VideoPlayer = ({ src, onClose, serverInfo }) => {
 
 export default function PhotoLibrary() {
   const [photos, setPhotos] = useState([]);
-  const [currentPath, setCurrentPath] = useState('/photos');
+  const [currentPath, setCurrentPath] = useState('/');
   const [viewMode, setViewMode] = useState('grid');
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -552,26 +553,36 @@ export default function PhotoLibrary() {
             }
             filePosition += bytesWritten;
           } else {
-            const writeUrl = `${API_BASE}/write?path=${encodeURIComponent(fileName)}&offset=${filePosition}`;
-            console.log(`[UPLOAD] POST ${writeUrl} (${chunkData.length} bytes)`);
+            let leaseRetry = 0;
+            while (true) {
+              const writeUrl = `${API_BASE}/write?path=${encodeURIComponent(fileName)}&offset=${filePosition}`;
+              console.log(`[UPLOAD] POST ${writeUrl} (${chunkData.length} bytes)`);
 
-            const writeResponse = await fetch(writeUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/octet-stream' },
-              body: chunkData
-            });
+              const writeResponse = await fetch(writeUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: chunkData
+              });
 
-            const writeResult = await writeResponse.json();
-            if (!writeResponse.ok) {
-              throw new Error(`Failed to write: ${writeResult.error}`);
+              const writeResult = await writeResponse.json();
+              if (!writeResponse.ok) {
+                const errorCode = Number(writeResult.Code ?? writeResult.code ?? 0);
+                if (errorCode === LEASE_EXPIRED_CODE && leaseRetry < 1) {
+                  leaseRetry += 1;
+                  showNotification('Lease refreshed, retrying...', 'info');
+                  continue;
+                }
+                throw new Error(`Failed to write: ${writeResult.Error || writeResult.error}`);
+              }
+
+              const reportedWritten = writeResult.data?.bytes_written;
+              const bytesWritten = Math.min(chunkData.length, reportedWritten || chunkData.length);
+              if (bytesWritten <= 0) {
+                throw new Error('Write returned 0 bytes written');
+              }
+              filePosition += bytesWritten;
+              break;
             }
-
-            const reportedWritten = writeResult.data?.bytes_written;
-            const bytesWritten = Math.min(chunkData.length, reportedWritten || chunkData.length);
-            if (bytesWritten <= 0) {
-              throw new Error('Write returned 0 bytes written');
-            }
-            filePosition += bytesWritten;
           }
 
           setUploadProgress({
@@ -891,6 +902,43 @@ export default function PhotoLibrary() {
     }
   };
 
+  const handleDeleteFolder = async (folderPath) => {
+    if (!confirm(`Delete folder ${folderPath.split('/').pop()} and its contents?`)) {
+      return;
+    }
+
+    try {
+      console.log(`\n=== DELETING FOLDER ${folderPath} ===`);
+
+      const response = await fetch(`${API_BASE}/delete`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath })
+      });
+
+      const result = await response.json();
+      console.log('[DELETE FOLDER] Response:', result);
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to delete folder');
+      }
+
+      console.log(`✓ Deleted folder ${folderPath}`);
+      showNotification('Folder deleted successfully');
+
+      setPhotoCache(prev => {
+        const newCache = { ...prev };
+        delete newCache[currentPath];
+        return newCache;
+      });
+
+      loadPhotos();
+    } catch (err) {
+      console.error('[DELETE FOLDER] Error:', err);
+      showNotification(`Failed to delete folder: ${err.message}`, 'error');
+    }
+  };
+
   /**
    * Create album (directory)
    */
@@ -941,7 +989,7 @@ export default function PhotoLibrary() {
 
   const navigateUp = () => {
     const parts = currentPath.split('/').filter(p => p);
-    if (parts.length <= 1) return; // Don't go above /photos
+    if (parts.length <= 1) return; // Don't go above root
     parts.pop();
     const newPath = '/' + parts.join('/');
     navigateToFolder(newPath);
@@ -1153,7 +1201,18 @@ export default function PhotoLibrary() {
                     <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/80 to-transparent">
                       <p className="text-white text-sm truncate">{photo.name}</p>
                     </div>
-                    {!photo.isDir && (
+                    {photo.isDir && photo.path !== '/photos' ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteFolder(photo.path);
+                        }}
+                        className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Delete folder"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    ) : !photo.isDir && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1192,7 +1251,18 @@ export default function PhotoLibrary() {
                       </button>
                     )}
                     <span className="text-white flex-1 truncate">{photo.name}</span>
-                    {!photo.isDir && (
+                    {photo.isDir && photo.path !== '/photos' ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteFolder(photo.path);
+                        }}
+                        className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Delete folder"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    ) : !photo.isDir && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
