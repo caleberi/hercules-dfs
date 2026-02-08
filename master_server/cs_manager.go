@@ -141,7 +141,7 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 	defer csm.chunkMutex.Unlock()
 	errs := []string{}
 
-	utils.ForEach(handles, func(handle common.ChunkHandle) {
+	utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
 		chk, exist := csm.chunks[handle]
 		if !exist {
 			errs = append(errs, fmt.Sprintf("chunk handle (%v) does not exist", handle))
@@ -149,7 +149,7 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 		}
 
 		chk.Lock()
-		chk.locations = utils.Filter(
+		chk.locations = utils.FilterSlice(
 			chk.locations,
 			func(v common.ServerAddr) bool {
 				return v != server
@@ -198,7 +198,7 @@ func (csm *ChunkServerManager) removeServer(addr common.ServerAddr) ([]common.Ch
 	}
 
 	var handles []common.ChunkHandle
-	utils.LoopOverMap(chk.chunks, func(handle common.ChunkHandle, _ bool) {
+	utils.IterateOverMap(chk.chunks, func(handle common.ChunkHandle, _ bool) {
 		handles = append(handles, handle)
 	})
 
@@ -303,11 +303,11 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 	var staleServers []common.ServerAddr
 	lease := &common.Lease{}
 
-	// log.Info().Msgf("reading chunk [%#v] in order to produce new lease with locations -> %v", chk, chk.locations)
+	log.Info().Msgf("reading chunk [%#v] in order to produce new lease with locations -> %v", chk, chk.locations)
 	if chk.isExpired(time.Now()) { // chunk has expired so move it
 		chk.version++
 
-		arg := rpc_struct.CheckChunkVersionArg{
+		arg := rpc_struct.CheckChunkVersionArgs{
 			Version: chk.version,
 			Handle:  handle,
 		}
@@ -324,7 +324,7 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 
 				var reply rpc_struct.CheckChunkVersionReply
 
-				err := shared.UnicastToRPCServer(string(addr), rpc_struct.CRPCCheckChunkVersionHandler, arg, &reply)
+				err := shared.UnicastToRPCServer(string(addr), rpc_struct.CRPCCheckChunkVersionHandler, arg, &reply, shared.DefaultRetryConfig)
 				lock.Lock()
 				defer lock.Unlock()
 				if err != nil || reply.Stale {
@@ -339,7 +339,7 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 		wg.Wait()
 
 		chk.locations = make([]common.ServerAddr, 0)
-		utils.ForEach(newLocationList, func(v string) { chk.locations = append(chk.locations, common.ServerAddr(v)) })
+		utils.ForEachInSlice(newLocationList, func(v string) { chk.locations = append(chk.locations, common.ServerAddr(v)) })
 
 		if len(chk.locations) < common.MinimumReplicationFactor {
 			csm.Lock()
@@ -357,13 +357,16 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 	}
 
 	lease.Primary = chk.primary
-	lease.Secondaries = utils.Filter(chk.locations, func(v common.ServerAddr) bool { return v != chk.primary })
+	lease.Secondaries = utils.FilterSlice(chk.locations, func(v common.ServerAddr) bool { return v != chk.primary })
+	lease.Handle = handle
 
 	if lease.Primary == "" && len(lease.Secondaries) > 0 {
 		lease.Primary = lease.Secondaries[0]
 		lease.Secondaries = lease.Secondaries[1:]
+		chk.primary = lease.Primary
 	}
 	lease.Expire = time.Now().Add(common.LeaseTimeout)
+	chk.expire = lease.Expire
 	go func() {
 		var (
 			args  rpc_struct.GrantLeaseInfoArgs
@@ -373,7 +376,7 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 		args.Primary = lease.Primary
 		args.Secondaries = lease.Secondaries
 		args.Handle = lease.Handle
-		err := shared.UnicastToRPCServer(string(lease.Primary), rpc_struct.CRPCGrantLeaseHandler, args, &reply)
+		err := shared.UnicastToRPCServer(string(lease.Primary), rpc_struct.CRPCGrantLeaseHandler, args, &reply, shared.DefaultRetryConfig)
 		if err != nil {
 			log.Err(err).Stack().Send()
 			log.Warn().Msg(fmt.Sprintf("could not grant lease to primary = %v", chk.primary))
@@ -417,7 +420,7 @@ func (csm *ChunkServerManager) chooseServers(num int) ([]common.ServerAddr, erro
 		return 0
 	})
 
-	all := utils.Map(intermediateArr, func(d addrToRRTL) common.ServerAddr { return d.addr })
+	all := utils.TransformSlice(intermediateArr, func(d addrToRRTL) common.ServerAddr { return d.addr })
 	choose, err := utils.Sample(len(all), num)
 	if err != nil {
 		return nil, err
@@ -461,10 +464,10 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 
 	args := rpc_struct.CreateChunkArgs{Handle: currentHandle}
 
-	utils.ForEach(addrs, func(addr common.ServerAddr) {
+	utils.ForEachInSlice(addrs, func(addr common.ServerAddr) {
 		var reply rpc_struct.CreateChunkReply
 		err := shared.UnicastToRPCServer(
-			string(addr), rpc_struct.CRPCCreateChunkHandler, args, &reply)
+			string(addr), rpc_struct.CRPCCreateChunkHandler, args, &reply, shared.DefaultRetryConfig)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -477,7 +480,7 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 		}
 	})
 
-	servers := utils.Map(success, func(v string) common.ServerAddr { return common.ServerAddr(v) })
+	servers := utils.TransformSlice(success, func(v string) common.ServerAddr { return common.ServerAddr(v) })
 	err := errors.Join(errs...)
 
 	// if err occurred during the creation of chunk, then
@@ -622,7 +625,7 @@ func (csm *ChunkServerManager) GetChunkHandles(filePath common.Path) ([]common.C
 		return nil, fmt.Errorf("cannot get handles for path => %v", filePath)
 	}
 
-	var ret []common.ChunkHandle
+	ret := make([]common.ChunkHandle, len(fileInfo.handles))
 	copy(ret, fileInfo.handles)
 	return ret, nil
 }
@@ -638,4 +641,18 @@ func (csm *ChunkServerManager) UpdateFilePath(source common.Path, target common.
 	}
 
 	return nil
+}
+
+func (csm *ChunkServerManager) GetLiveServers() []common.ServerAddr {
+	csm.serverMutex.Lock()
+	defer csm.serverMutex.Unlock()
+
+	allServers := make([]common.ServerAddr, 0, len(csm.servers))
+	utils.IterateOverMap(csm.servers, func(serverAddr common.ServerAddr, chunk *chunkServerInfo) {
+		if !chunk.lastHeatBeat.IsZero() && time.Now().Before(chunk.lastHeatBeat.Add(common.ServerHealthCheckTimeout)) {
+			allServers = append(allServers, serverAddr)
+		}
+	})
+
+	return allServers
 }
