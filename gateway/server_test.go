@@ -17,6 +17,7 @@ import (
 
 	"github.com/caleberi/distributed-system/chunkserver"
 	"github.com/caleberi/distributed-system/common"
+	failuredetector "github.com/caleberi/distributed-system/detector"
 	"github.com/caleberi/distributed-system/hercules"
 	"github.com/caleberi/distributed-system/master_server"
 	"github.com/jaswdr/faker/v2"
@@ -29,7 +30,18 @@ func setupMasterServerForGateway(t *testing.T, ctx context.Context, root, addres
 	assert.NotEmpty(t, root)
 	assert.NotEmpty(t, address)
 
-	server := master_server.NewMasterServer(ctx, common.ServerAddr(address), root)
+	server := master_server.NewMasterServer(ctx, master_server.MasterServerConfig{
+		ServerAddress: common.ServerAddr(address),
+		RootDir:       root,
+
+		RedisAddr:       "localhost:6379",
+		EntryExpiryTime: 10 * time.Millisecond,
+		WindowSize:      100,
+		SuspicionLevel: failuredetector.SuspicionLevel{
+			AccumulationThreshold: 3.0,
+			UpperBoundThreshold:   8.0,
+		},
+	})
 	assert.NotNil(t, server)
 	return server
 }
@@ -108,7 +120,8 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 	config.ReadTimeout = 10 * time.Second
 	config.WriteTimeout = 10 * time.Second
 
-	gateway := NewHerculesHTTPGateway(ctx, client, config)
+	gateway, err := NewHerculesHTTPGateway(ctx, client, config)
+	assert.NoError(t, err)
 	gateway.Start()
 
 	time.Sleep(2 * time.Second)
@@ -542,7 +555,19 @@ func BenchmarkGatewayWrite(b *testing.B) {
 	masterDir := b.TempDir()
 	masterAddr := "127.0.0.1:9092"
 
-	master := master_server.NewMasterServer(ctx, common.ServerAddr(masterAddr), masterDir)
+	master := master_server.NewMasterServer(ctx,
+		master_server.MasterServerConfig{
+			ServerAddress: common.ServerAddr(masterAddr),
+			RootDir:       masterDir,
+
+			RedisAddr:       "localhost:6379",
+			EntryExpiryTime: 10 * time.Millisecond,
+			WindowSize:      100,
+			SuspicionLevel: failuredetector.SuspicionLevel{
+				AccumulationThreshold: 3.0,
+				UpperBoundThreshold:   8.0,
+			},
+		})
 	defer master.Shutdown()
 
 	slaves := []*chunkserver.ChunkServer{}
@@ -570,7 +595,8 @@ func BenchmarkGatewayWrite(b *testing.B) {
 	config.Address = 8083
 	config.Logger = zerolog.Nop()
 
-	gateway := NewHerculesHTTPGateway(ctx, client, config)
+	gateway, err := NewHerculesHTTPGateway(ctx, client, config)
+	assert.NoError(b, err)
 	gateway.Start()
 	defer gateway.Shutdown()
 
@@ -614,7 +640,18 @@ func BenchmarkGatewayRead(b *testing.B) {
 	masterDir := b.TempDir()
 	masterAddr := "127.0.0.1:9093"
 
-	master := master_server.NewMasterServer(ctx, common.ServerAddr(masterAddr), masterDir)
+	master := master_server.NewMasterServer(ctx, master_server.MasterServerConfig{
+		ServerAddress: common.ServerAddr(masterAddr),
+		RootDir:       masterDir,
+
+		RedisAddr:       "localhost:6379",
+		EntryExpiryTime: 10 * time.Millisecond,
+		WindowSize:      100,
+		SuspicionLevel: failuredetector.SuspicionLevel{
+			AccumulationThreshold: 3.0,
+			UpperBoundThreshold:   8.0,
+		},
+	})
 	defer master.Shutdown()
 
 	slaves := []*chunkserver.ChunkServer{}
@@ -642,7 +679,8 @@ func BenchmarkGatewayRead(b *testing.B) {
 	config.Address = 8084
 	config.Logger = zerolog.Nop()
 
-	gateway := NewHerculesHTTPGateway(ctx, client, config)
+	gateway, err := NewHerculesHTTPGateway(ctx, client, config)
+	assert.NoError(b, err)
 	gateway.Start()
 	defer gateway.Shutdown()
 
@@ -696,7 +734,18 @@ func BenchmarkGatewayAppend(b *testing.B) {
 	masterDir := b.TempDir()
 	masterAddr := "127.0.0.1:9094"
 
-	master := master_server.NewMasterServer(ctx, common.ServerAddr(masterAddr), masterDir)
+	master := master_server.NewMasterServer(ctx, master_server.MasterServerConfig{
+		ServerAddress: common.ServerAddr(masterAddr),
+		RootDir:       masterDir,
+
+		RedisAddr:       "localhost:6379",
+		EntryExpiryTime: 10 * time.Millisecond,
+		WindowSize:      100,
+		SuspicionLevel: failuredetector.SuspicionLevel{
+			AccumulationThreshold: 3.0,
+			UpperBoundThreshold:   8.0,
+		},
+	})
 	defer master.Shutdown()
 
 	slaves := []*chunkserver.ChunkServer{}
@@ -724,7 +773,8 @@ func BenchmarkGatewayAppend(b *testing.B) {
 	config.Address = 8085
 	config.Logger = zerolog.Nop()
 
-	gateway := NewHerculesHTTPGateway(ctx, client, config)
+	gateway, err := NewHerculesHTTPGateway(ctx, client, config)
+	assert.NoError(b, err)
 	gateway.Start()
 	defer gateway.Shutdown()
 

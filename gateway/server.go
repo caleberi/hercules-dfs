@@ -59,7 +59,7 @@ func DefaultGatewayConfig() GatewayConfig {
 
 // NewHerculesHTTPGateway creates a new HTTP gateway for the Hercules file system.
 func NewHerculesHTTPGateway(
-	ctx context.Context, client *sdk.HerculesClient, config GatewayConfig) *HerculesHTTPGateway {
+	ctx context.Context, client *sdk.HerculesClient, config GatewayConfig) (*HerculesHTTPGateway, error) {
 	actx, cancel := context.WithCancel(ctx)
 
 	router := gin.New(func(e *gin.Engine) {
@@ -94,7 +94,8 @@ func NewHerculesHTTPGateway(
 		loggerWriter = zerolog.Nop()
 	}
 
-	gateway.server = engine.NewServer(
+	var err error
+	gateway.server, err = engine.NewServer(
 		config.ServerName,
 		config.Address,
 		loggerWriter,
@@ -109,6 +110,9 @@ func NewHerculesHTTPGateway(
 			UseColorizedLogger:           true,
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	gateway.registerRoutes(router)
 	gateway.server.Mux = router
@@ -119,7 +123,7 @@ func NewHerculesHTTPGateway(
 		gateway.logger = zerolog.Nop()
 	}
 
-	return gateway
+	return gateway, nil
 }
 
 // registerRoutes sets up all HTTP endpoints following GFS operations.
@@ -190,8 +194,13 @@ func (g *HerculesHTTPGateway) respondJSON(c *gin.Context, status int, data inter
 
 func (g *HerculesHTTPGateway) respondError(c *gin.Context, status int, err error) {
 	g.logger.Error().Err(err).Int("status", status).Msg("Request error")
+	code := ""
+	if cerr, ok := err.(common.Error); ok {
+		code = fmt.Sprint(cerr.Code)
+	}
 	c.JSON(status, ErrorResponse{
 		Error:   err.Error(),
+		Code:    code,
 		Message: "Operation failed",
 	})
 }
@@ -285,6 +294,31 @@ func (g *HerculesHTTPGateway) handleDeleteFile(c *gin.Context) {
 
 	if req.Path == "" {
 		g.respondError(c, http.StatusBadRequest, fmt.Errorf("path is required"))
+		return
+	}
+
+	g.mu.RLock()
+	info, infoErr := g.client.GetFile(common.Path(req.Path))
+	g.mu.RUnlock()
+	if infoErr != nil {
+		g.respondError(c, http.StatusInternalServerError, infoErr)
+		return
+	}
+
+	if info.IsDir {
+		g.mu.RLock()
+		err := g.client.RemoveDir(common.Path(req.Path))
+		g.mu.RUnlock()
+		if err != nil {
+			g.respondError(c, http.StatusInternalServerError, err)
+			return
+		}
+
+		g.respondJSON(c, http.StatusOK, SuccessResponse{
+			Success: true,
+			Message: "Directory deleted successfully",
+			Data:    map[string]string{"path": req.Path},
+		})
 		return
 	}
 
