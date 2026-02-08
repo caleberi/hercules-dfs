@@ -1,4 +1,4 @@
-.PHONY: help build-all build-master build-chunk build-gateway up down restart logs clean rebuild scale test status health
+.PHONY: help build-all build-master build-chunk build-gateway up down restart logs clean rebuild rebuild-service up-build scale test status health
 
 # Colors for output
 RED := \033[0;31m
@@ -59,6 +59,8 @@ help:
 	@echo ""
 	@echo "$(GREEN)Utilities:$(NC)"
 	@echo "  make rebuild         - Clean and rebuild everything"
+	@echo "  make up-build        - Rebuild and restart services in-place"
+	@echo "  make rebuild-service SERVICE=gateway - Rebuild a single service without restarting the stack"
 	@echo "  make reset           - Complete system reset"
 	@echo "  make backup          - Backup all data volumes"
 	@echo "  make network-info    - Show network configuration"
@@ -280,6 +282,22 @@ shell-gateway:
 
 rebuild: clean build-all
 	@echo "$(GREEN)✓ Rebuild complete$(NC)"
+
+up-build:
+	@echo "$(BLUE)Rebuilding and restarting services...$(NC)"
+	@docker-compose up -d --build
+	@echo "$(GREEN)✓ Services rebuilt and restarted$(NC)"
+
+rebuild-service:
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "$(RED)Error: Please specify SERVICE=<service>$(NC)"; \
+		echo "Example: make rebuild-service SERVICE=gateway"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Rebuilding $(SERVICE) without restarting the stack...$(NC)"
+	@docker-compose build $(SERVICE)
+	@docker-compose up -d --no-deps --force-recreate $(SERVICE)
+	@echo "$(GREEN)✓ $(SERVICE) rebuilt and restarted$(NC)"
 
 reset: clean
 	@echo "$(YELLOW)Performing complete system reset...$(NC)"
