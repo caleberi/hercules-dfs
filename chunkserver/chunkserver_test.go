@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/caleberi/distributed-system/common"
+	failuredetector "github.com/caleberi/distributed-system/detector"
 	downloadbuffer "github.com/caleberi/distributed-system/download_buffer"
 	"github.com/caleberi/distributed-system/master_server"
 	"github.com/caleberi/distributed-system/rpc_struct"
@@ -39,7 +40,19 @@ func setupMasterServer(
 	assert.NotEmpty(t, address)
 
 	server := master_server.NewMasterServer(
-		ctx, common.ServerAddr(address), root)
+		ctx,
+		master_server.MasterServerConfig{
+			ServerAddress: common.ServerAddr(address),
+			RootDir:       root,
+
+			RedisAddr:       "localhost:6379",
+			EntryExpiryTime: 10 * time.Millisecond,
+			WindowSize:      100,
+			SuspicionLevel: failuredetector.SuspicionLevel{
+				AccumulationThreshold: 3.0,
+				UpperBoundThreshold:   8.0,
+			},
+		})
 	assert.NotNil(t, server)
 	return server
 }
@@ -61,7 +74,7 @@ func populateServers(t *testing.T, masterAddress common.ServerAddr) []common.Chu
 			rpc_struct.GetChunkHandleArgs{
 				Path:  common.Path(fakePath),
 				Index: index,
-			}, getChunkHandleReply)
+			}, getChunkHandleReply, shared.DefaultRetryConfig)
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, getChunkHandleReply.Handle, common.ChunkHandle(index))
 
@@ -71,7 +84,7 @@ func populateServers(t *testing.T, masterAddress common.ServerAddr) []common.Chu
 			rpc_struct.MRPCGetPrimaryAndSecondaryServersInfoHandler,
 			rpc_struct.PrimaryAndSecondaryServersInfoArg{
 				Handle: getChunkHandleReply.Handle,
-			}, primaryAndSecondaryInfoReply)
+			}, primaryAndSecondaryInfoReply, shared.DefaultRetryConfig)
 		require.NoError(t, err)
 		require.NotEmpty(t, primaryAndSecondaryInfoReply.Primary)
 		require.NotEmpty(t, primaryAndSecondaryInfoReply.SecondaryServers)
@@ -86,7 +99,7 @@ func populateServers(t *testing.T, masterAddress common.ServerAddr) []common.Chu
 				DownloadBufferId: downloadBufferId,
 				Data:             []byte(lorem),
 				Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-			}, forwardDataReply)
+			}, forwardDataReply, shared.DefaultRetryConfig)
 		require.NoError(t, err)
 		require.Zero(t, forwardDataReply.ErrorCode)
 
@@ -99,7 +112,7 @@ func populateServers(t *testing.T, masterAddress common.ServerAddr) []common.Chu
 				DownloadBufferId: downloadBufferId,
 				Offset:           common.Offset(0),
 				Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-			}, writeChunkReply)
+			}, writeChunkReply, shared.DefaultRetryConfig)
 		require.NoError(t, err)
 		require.Zero(t, writeChunkReply.ErrorCode)
 
@@ -147,7 +160,7 @@ func TestRPCHandler(t *testing.T) {
 				err := shared.UnicastToRPCServer(
 					string(master.ServerAddr),
 					rpc_struct.MRPCHeartBeatHandler,
-					rpc_struct.HeartBeatArg{
+					rpc_struct.HeartBeatArgs{
 						Address:       slave.ServerAddr,
 						PendingLeases: make([]*common.Lease, 0),
 						MachineInfo: common.MachineInfo{
@@ -155,7 +168,7 @@ func TestRPCHandler(t *testing.T) {
 							Hostname:               "hostname-12",
 						},
 						ExtendLease: false,
-					}, reply)
+					}, reply, shared.DefaultRetryConfig)
 				assert.NoError(t, err)
 				assert.False(t, reply.LastHeartBeat.IsZero())
 			},
@@ -168,7 +181,7 @@ func TestRPCHandler(t *testing.T) {
 				err := shared.UnicastToRPCServer(
 					string(slave.ServerAddr),
 					rpc_struct.CRPCSysReportHandler,
-					rpc_struct.SysReportInfoArg{}, reply)
+					rpc_struct.SysReportInfoArgs{}, reply, shared.DefaultRetryConfig)
 				assert.NoError(t, err)
 				assert.NotEmpty(t, reply.Chunks)
 				assert.NotEmpty(t, reply.SysMem)
@@ -193,14 +206,14 @@ func TestRPCHandler(t *testing.T) {
 					},
 				}
 				for _, subTestcase := range subTestcases {
-					args := rpc_struct.CheckChunkVersionArg{
+					args := rpc_struct.CheckChunkVersionArgs{
 						Handle: subTestcase.handle,
 					}
 					t.Run(t.Name()+"_"+subTestcase.name, func(t *testing.T) {
 						err := shared.UnicastToRPCServer(
 							string(slave.ServerAddr),
 							rpc_struct.CRPCCheckChunkVersionHandler,
-							args, reply)
+							args, reply, shared.DefaultRetryConfig)
 						assert.NoError(t, err)
 						if !subTestcase.shouldBumpVersion {
 							assert.True(t, reply.Stale)
@@ -225,7 +238,7 @@ func TestRPCHandler(t *testing.T) {
 						Handle: handle,
 						Offset: 0,
 						Length: int64(20),
-					}, reply)
+					}, reply, shared.DefaultRetryConfig)
 
 				assert.NoError(t, err)
 				assert.NotEmpty(t, reply.Data)
@@ -245,7 +258,7 @@ func TestRPCHandler(t *testing.T) {
 					rpc_struct.GetChunkHandleArgs{
 						Path:  common.Path(fakePath),
 						Index: index,
-					}, getChunkHandleReply)
+					}, getChunkHandleReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.GreaterOrEqual(t, getChunkHandleReply.Handle, common.ChunkHandle(index))
 
@@ -255,7 +268,7 @@ func TestRPCHandler(t *testing.T) {
 					rpc_struct.MRPCGetPrimaryAndSecondaryServersInfoHandler,
 					rpc_struct.PrimaryAndSecondaryServersInfoArg{
 						Handle: getChunkHandleReply.Handle,
-					}, primaryAndSecondaryInfoReply)
+					}, primaryAndSecondaryInfoReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.NotEmpty(t, primaryAndSecondaryInfoReply.Primary)
 				require.NotEmpty(t, primaryAndSecondaryInfoReply.SecondaryServers)
@@ -270,7 +283,7 @@ func TestRPCHandler(t *testing.T) {
 						DownloadBufferId: downloadBufferId,
 						Data:             []byte(fake.Lorem().Paragraph(5)),
 						Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-					}, forwardDataReply)
+					}, forwardDataReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.Zero(t, forwardDataReply.ErrorCode)
 
@@ -290,7 +303,7 @@ func TestRPCHandler(t *testing.T) {
 									DownloadBufferId: downloadBufferId,
 									Offset:           0,
 									Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-								}, reply)
+								}, reply, shared.DefaultRetryConfig)
 
 							assert.NoError(t, err)
 							assert.Zero(t, reply.ErrorCode)
@@ -310,7 +323,7 @@ func TestRPCHandler(t *testing.T) {
 									DownloadBufferId: downloadBufferId,
 									Data:             []byte(contents),
 									Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-								}, forwardDataReply)
+								}, forwardDataReply, shared.DefaultRetryConfig)
 							require.NoError(t, err)
 							require.Zero(t, forwardDataReply.ErrorCode)
 
@@ -321,7 +334,7 @@ func TestRPCHandler(t *testing.T) {
 								rpc_struct.AppendChunkArgs{
 									DownloadBufferId: downloadBufferId,
 									Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-								}, reply)
+								}, reply, shared.DefaultRetryConfig)
 
 							assert.NoError(t, err)
 							assert.Zero(t, reply.ErrorCode)
@@ -335,7 +348,7 @@ func TestRPCHandler(t *testing.T) {
 									Handle: getChunkHandleReply.Handle,
 									Offset: common.Offset(0),
 									Length: int64(len(contents)),
-								}, readReply)
+								}, readReply, shared.DefaultRetryConfig)
 
 							assert.NoError(t, err)
 							assert.Zero(t, readReply.ErrorCode)
@@ -364,7 +377,7 @@ func TestRPCHandler(t *testing.T) {
 					rpc_struct.GetChunkHandleArgs{
 						Path:  common.Path(fakePath),
 						Index: index,
-					}, getChunkHandleReply)
+					}, getChunkHandleReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.GreaterOrEqual(t, getChunkHandleReply.Handle, common.ChunkHandle(index))
 
@@ -374,7 +387,7 @@ func TestRPCHandler(t *testing.T) {
 					rpc_struct.MRPCGetPrimaryAndSecondaryServersInfoHandler,
 					rpc_struct.PrimaryAndSecondaryServersInfoArg{
 						Handle: getChunkHandleReply.Handle,
-					}, primaryAndSecondaryInfoReply)
+					}, primaryAndSecondaryInfoReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.NotEmpty(t, primaryAndSecondaryInfoReply.Primary)
 				require.NotEmpty(t, primaryAndSecondaryInfoReply.SecondaryServers)
@@ -389,7 +402,7 @@ func TestRPCHandler(t *testing.T) {
 						DownloadBufferId: downloadBufferId,
 						Data:             []byte(fake.Lorem().Paragraph(5)),
 						Replicas:         primaryAndSecondaryInfoReply.SecondaryServers,
-					}, forwardDataReply)
+					}, forwardDataReply, shared.DefaultRetryConfig)
 				require.NoError(t, err)
 				require.Zero(t, forwardDataReply.ErrorCode)
 
@@ -401,7 +414,7 @@ func TestRPCHandler(t *testing.T) {
 						MutationType:     common.MutationAppend,
 						Offset:           0,
 						DownloadBufferId: downloadBufferId},
-					reply)
+					reply, shared.DefaultRetryConfig)
 
 				assert.NoError(t, err)
 				assert.Zero(t, reply.ErrorCode)

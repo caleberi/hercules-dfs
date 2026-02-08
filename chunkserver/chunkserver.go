@@ -20,10 +20,11 @@ import (
 	"syscall"
 	"time"
 
-	archivemanager "github.com/caleberi/distributed-system/archive_manager"
+	archivemanager "github.com/caleberi/distributed-system/archive"
 	"github.com/caleberi/distributed-system/common"
+	detector "github.com/caleberi/distributed-system/detector"
+	failuredetector "github.com/caleberi/distributed-system/detector"
 	downloadbuffer "github.com/caleberi/distributed-system/download_buffer"
-	failuredetector "github.com/caleberi/distributed-system/failure_detector"
 	filesystem "github.com/caleberi/distributed-system/file_system"
 	"github.com/caleberi/distributed-system/library"
 	"github.com/caleberi/distributed-system/rpc_struct"
@@ -40,10 +41,6 @@ import (
 type chunkInfo struct {
 	sync.RWMutex // handling lock during mutation ops
 
-	length   common.Offset       // last known offset of this chunk
-	checksum common.Checksum     // tracking data corruption
-	version  common.ChunkVersion // latest version for data reconciliation (current version)
-
 	completed    bool // indicates if mutation was ever marked done
 	abandoned    bool // indicates if mutation was ever marked abandoned
 	isCompressed bool // indicates if the chunk is compressed
@@ -51,11 +48,15 @@ type chunkInfo struct {
 	replication  int // number of replicas for this chunk
 	serverStatus int // status of the server hosting this chunk
 
+	length  common.Offset       // last known offset of this chunk
+	version common.ChunkVersion // latest version for data reconciliation (current version)
+
 	creationTime time.Time // creation time of the chunk
 	lastModified time.Time // last modified time of the chunk
 	accessTime   time.Time // last access time of the chunk
 
 	mutations map[common.ChunkVersion]common.Mutation // all necessary mutations to be committed for this chunk to FS
+	checksum  common.Checksum                         // tracking data corruption
 }
 
 // ChunkServer represents a server instance in a distributed file system, managing
@@ -68,9 +69,9 @@ type ChunkServer struct {
 	rootDir *filesystem.FileSystem     // root directory file system for chunk storage
 	leases  utils.Deque[*common.Lease] // deque of active leases for chunk access
 
-	archiver        *archivemanager.ArchiverManager  // manager for archiving chunks
-	downloadBuffer  *downloadbuffer.DownloadBuffer   // buffer for handling downloads
-	failureDetector *failuredetector.FailureDetector // detector for identifying node failures
+	archiver        *archivemanager.ArchiverManager // manager for archiving chunks
+	downloadBuffer  *downloadbuffer.DownloadBuffer  // buffer for handling downloads
+	failureDetector *detector.FailureDetector       // detector for identifying node failures
 
 	garbage utils.Deque[common.ChunkHandle]   // deque of chunks marked for garbage collection
 	chunks  map[common.ChunkHandle]*chunkInfo // map of chunk handles to their metadata
@@ -143,8 +144,8 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 		&redis.Options{Addr: string(redisAddr)},
 		common.FailureDetectorKeyExipiryTime,
 		failuredetector.SuspicionLevel{
-			AccruementThreshold: 7,
-			UpperBoundThreshold: 3,
+			AccumulationThreshold: 7,
+			UpperBoundThreshold:   3,
 		})
 	if err != nil {
 		return nil, err
@@ -167,7 +168,7 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 		leases:          utils.Deque[*common.Lease]{},
 		chunks:          make(map[common.ChunkHandle]*chunkInfo),
 		garbage:         utils.Deque[common.ChunkHandle]{},
-		archiver:        archivemanager.NewArchiver(fs, 2),
+		archiver:        archivemanager.NewArchiver(context.Background(), fs, 2),
 		failureDetector: failureDetector,
 		isDead:          false,
 		downloadBuffer:  dbuffer,
@@ -278,12 +279,11 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 //
 // Returns nil if all chunks are processed successfully, or a combined error if any failures occur.
 func (cs *ChunkServer) archiveChunks() error {
-	chunksToArchive := map[common.ChunkHandle]*chunkInfo{}
 	checkAccessTime := func(value *chunkInfo) bool {
 		return time.Until(value.accessTime).Hours()/24 > common.ArchivalDaySpan
 	}
 	cs.mu.Lock()
-	utils.ExtractFromMap(cs.chunks, chunksToArchive, checkAccessTime)
+	chunksToArchive := utils.ExtractFromMap(cs.chunks, checkAccessTime)
 	cs.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -321,7 +321,7 @@ func (cs *ChunkServer) archiveChunks() error {
 				continue
 			}
 			cs.mu.Lock()
-			filename := strings.TrimSuffix(string(result.Path), archivemanager.ZIP_EXT)
+			filename := strings.TrimSuffix(string(result.Path), ".gz")
 			if handle, exists := pathToHandle[common.Path(filename)]; exists {
 				cs.chunks[handle].isCompressed = true
 			}
@@ -359,7 +359,7 @@ func (cs *ChunkServer) unarchiveChunks(handle common.ChunkHandle) error {
 	}
 
 	if chunkInfo.isCompressed {
-		filename := fmt.Sprintf(common.ChunkFileNameFormat+archivemanager.ZIP_EXT, handle)
+		filename := fmt.Sprintf(common.ChunkFileNameFormat+".gz", handle)
 		cs.archiver.SubmitDecompress(common.Path(filename))
 		result := <-cs.archiver.DecompressPipeline.Result
 		if result.Err != nil {
@@ -409,13 +409,21 @@ func (cs *ChunkServer) loadMetadata() error {
 	err = decoder.Decode(&metas)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
-			log.Err(err).Msg(fmt.Sprintf("Server %s failed to decode metadata", cs.ServerAddr))
-			return err
+			log.Err(err).Msg(fmt.Sprintf("Server %s failed to decode metadata; attempting recovery", cs.ServerAddr))
+			corruptName := fmt.Sprintf("%s.corrupt.%d", common.ChunkMetaDataFileName, time.Now().Unix())
+			if renameErr := cs.rootDir.Rename(common.ChunkMetaDataFileName, corruptName); renameErr != nil {
+				log.Err(renameErr).Msg("failed to rename corrupt chunk metadata")
+				return err
+			}
+			if createErr := cs.rootDir.CreateFile(common.ChunkMetaDataFileName); createErr != nil {
+				return createErr
+			}
+			return nil
 		}
 	}
 
 	log.Info().Msg(fmt.Sprintf("Server %s found metas with length %d", cs.ServerAddr, len(metas)))
-	utils.ForEach(metas, func(m PersistedMetaData) {
+	utils.ForEachInSlice(metas, func(m PersistedMetaData) {
 		if m.Length < 0 {
 			log.Warn().Msg(
 				fmt.Sprintf("Server %s skipping invalid metadata for chunk-%d: negative length",
@@ -449,24 +457,19 @@ func (cs *ChunkServer) loadMetadata() error {
 //   - nil if the heartbeat is successfully sent, processed, and failure prediction is recorded.
 //   - An error if the RPC call fails, network data recording fails, or failure prediction fails.
 func (cs *ChunkServer) heartBeat() error {
-	arg := rpc_struct.HeartBeatArg{
+	arg := rpc_struct.HeartBeatArgs{
 		Address:     cs.ServerAddr,
 		MachineInfo: cs.MachineInfo,
-		ExtendLease: true,
 	}
 
 	if cs.leases.Length() != 0 {
 		arg.ExtendLease = true
 	}
+	arg.NetworkData.ForwardTrip.SentAt = time.Now()
 
 	var reply rpc_struct.HeartBeatReply
-	reply.NetworkData = failuredetector.NetworkData{
-		ForwardTrip: failuredetector.TripInfo{
-			SentAt: time.Now(),
-		},
-	}
 	if err := shared.UnicastToRPCServer(string(cs.MasterAddr),
-		rpc_struct.MRPCHeartBeatHandler, arg, &reply); err != nil {
+		rpc_struct.MRPCHeartBeatHandler, arg, &reply, shared.DefaultRetryConfig); err != nil {
 		return err
 	}
 
@@ -477,19 +480,21 @@ func (cs *ChunkServer) heartBeat() error {
 	}
 
 	if reply.LeaseExtensions != nil {
-		utils.ForEach(reply.LeaseExtensions, func(lease *common.Lease) {
+		utils.ForEachInSlice(reply.LeaseExtensions, func(lease *common.Lease) {
 			cs.leases.PushBack(lease)
 		})
 	}
 
 	if reply.Garbage != nil {
-		utils.ForEach(reply.Garbage, func(handle common.ChunkHandle) {
+		utils.ForEachInSlice(reply.Garbage, func(handle common.ChunkHandle) {
 			cs.garbage.PushBack(handle)
 		})
 	}
 	prediction, err := cs.failureDetector.PredictFailure()
 	if err != nil {
-		log.Err(err).Stack().Send()
+		if !errors.Is(err, detector.ErrNotEnoughHistoricalSamples) {
+			log.Err(err).Stack().Send()
+		}
 	} else {
 		log.Info().Msgf("server=%s prediction=%.2f  message=%s", cs.ServerAddr, prediction.Phi, prediction.Message)
 	}
@@ -511,6 +516,12 @@ func (cs *ChunkServer) persistMetadata() error {
 	log.Info().Msg("<<< persisting metadata to file >>> ")
 	file, err := cs.rootDir.GetFile(common.ChunkMetaDataFileName, os.O_RDWR, common.FileMode)
 	if err != nil {
+		return err
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return err
+	}
+	if err := file.Truncate(0); err != nil {
 		return err
 	}
 	defer func(file *os.File) {
@@ -604,7 +615,7 @@ func (cs *ChunkServer) deleteChunk(handle common.ChunkHandle) error {
 
 	filename := fmt.Sprintf(common.ChunkFileNameFormat, handle)
 	if chunkInfo.isCompressed {
-		filename += archivemanager.ZIP_EXT
+		filename += ".gz"
 	}
 	err := cs.rootDir.RemoveFile(filename)
 	if err != nil {
@@ -635,16 +646,16 @@ func (cs *ChunkServer) Shutdown() error {
 		return nil
 	}
 	cs.isDead = true
-
 	cs.mu.Unlock()
+	log.Info().Msgf("Server %s: clearing download buffer before shutdown", cs.ServerAddr)
+	cs.downloadBuffer.Done()
+	cs.archiver.Close()
+
 	err := cs.garbageCollection()
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Server %s: clearing download buffer before shutdown", cs.ServerAddr)
-	cs.downloadBuffer.Done()
-	cs.archiver.Close()
 	log.Info().Msgf("Server %s: saving metadata before shutdown", cs.ServerAddr)
 	if err := cs.persistMetadata(); err != nil {
 		log.Err(err).Stack().Msgf("Server %s: failed to persist metadata during shutdown", cs.ServerAddr)
@@ -672,6 +683,15 @@ func (cs *ChunkServer) Shutdown() error {
 //
 // /////////////////////////////////
 
+// RPCHeartBeatHandler records network timing data for master-initiated heartbeats.
+// It only populates network trip timestamps without mutating server state.
+func (cs *ChunkServer) RPCHeartBeatHandler(args rpc_struct.ChunkServerHeartBeatArgs, reply *rpc_struct.ChunkServerHeartBeatReply) error {
+	reply.NetworkData = args.NetworkData
+	reply.NetworkData.ForwardTrip.ReceivedAt = time.Now()
+	defer func() { reply.NetworkData.BackwardTrip.SentAt = time.Now() }()
+	return nil
+}
+
 // RPCSysReportHandler gathers system memory statistics and chunk metadata for an RPC system report.
 // It collects memory usage (Alloc, TotalAlloc, Sys, NumGC) using runtime.MemStats, formats them into
 // a table for logging, and retrieves chunk metadata from the server's chunk map (cs.chunks). The
@@ -687,39 +707,15 @@ func (cs *ChunkServer) Shutdown() error {
 // Returns:
 //   - nil if the system report is successfully generated and populated in the reply.
 //   - An error is not returned in the current implementation, but future versions could include error handling for critical failures.
-func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArg, reply *rpc_struct.SysReportInfoReply) error {
+func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArgs, reply *rpc_struct.SysReportInfoReply) error {
 	log.Info().Msgf("Server %s: gathering system statistics", cs.ServerAddr)
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	alloc, err := utils.BToMb(m.Alloc)
-	if err != nil {
-		return err
-	}
-	totalAlloc, err := utils.BToMb(m.TotalAlloc)
-	if err != nil {
-		return err
-	}
-	tSys, err := utils.BToMb(m.Sys)
-	if err != nil {
-		return err
-	}
-	numGC, err := utils.BToMb(uint64(m.NumGC))
-	if err != nil {
-		return err
-	}
-
-	log.Info().Msgf("Server %s: memory statistics\n", cs.ServerAddr)
-	table := tablewriter.NewWriter(log.Logger)
-	table.Header([]string{"Metric", "Value (MiB)"})
-	table.Append([]string{"Alloc", fmt.Sprintf("%v", alloc)})
-	table.Append([]string{"TotalAlloc", fmt.Sprintf("%v", totalAlloc)})
-	table.Append([]string{"Sys", fmt.Sprintf("%v", tSys)})
-	table.Append([]string{"NumGC", fmt.Sprintf("%v", numGC)})
-	err = table.Render()
-	if err != nil {
-		return err
-	}
+	alloc := utils.BToMb(m.Alloc)
+	totalAlloc := utils.BToMb(m.TotalAlloc)
+	tSys := utils.BToMb(m.Sys)
+	numGC := utils.BToMb(uint64(m.NumGC))
 
 	mem := common.Memory{
 		TotalAlloc: totalAlloc,
@@ -728,8 +724,8 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArg, rep
 		Alloc:      alloc,
 	}
 
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
 
 	chunkInfos := make([]common.PersistedChunkInfo, 0)
 	for h, ch := range cs.chunks {
@@ -753,6 +749,17 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArg, rep
 	reply.SysMem = mem
 
 	log.Info().Msgf("Server %s: completed system statistics retrieval", cs.ServerAddr)
+	log.Info().Msgf("Server %s: memory statistics\n", cs.ServerAddr)
+	table := tablewriter.NewWriter(log.Logger)
+	table.Header([]string{"Metric", "Value (MiB)"})
+	table.Append([]string{"Alloc", fmt.Sprintf("%v", alloc)})
+	table.Append([]string{"TotalAlloc", fmt.Sprintf("%v", totalAlloc)})
+	table.Append([]string{"Sys", fmt.Sprintf("%v", tSys)})
+	table.Append([]string{"NumGC", fmt.Sprintf("%v", numGC)})
+	err := table.Render()
+	if err != nil {
+		log.Err(err).Stack().Msgf("Server %s: failed to render memory statistics table", cs.ServerAddr)
+	}
 	return nil
 }
 
@@ -774,7 +781,7 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArg, rep
 //   - nil if the chunk version is successfully checked or the chunk does not exist.
 //   - Note: Errors are not currently returned, but invalid chunk data could warrant an error in future versions.
 func (cs *ChunkServer) RPCCheckChunkVersionHandler(
-	args rpc_struct.CheckChunkVersionArg, reply *rpc_struct.CheckChunkVersionReply) error {
+	args rpc_struct.CheckChunkVersionArgs, reply *rpc_struct.CheckChunkVersionReply) error {
 	cs.mu.Lock()
 	chinfo, ok := cs.chunks[args.Handle]
 	cs.mu.Unlock()
@@ -920,7 +927,7 @@ func (cs *ChunkServer) RPCForwardDataHandler(args rpc_struct.ForwardDataArgs, re
 
 	replicaAddr := args.Replicas[0]
 	args.Replicas = args.Replicas[1:]
-	return shared.UnicastToRPCServer(string(replicaAddr), rpc_struct.CRPCForwardDataHandler, args, &reply)
+	return shared.UnicastToRPCServer(string(replicaAddr), rpc_struct.CRPCForwardDataHandler, args, &reply, shared.DefaultRetryConfig)
 }
 
 // RPCGrantLeaseHandler handles an RPC request to grant a lease for a chunk on the ChunkServer.
@@ -971,19 +978,17 @@ func (cs *ChunkServer) RPCWriteChunkHandler(args rpc_struct.WriteChunkArgs, repl
 
 	// calculate the next offset from the prevous cursor position
 	// assumption is that the data in the buffer is greated than 64 << 20
-	dataSize, err := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
-	if err != nil {
-		return err
-	}
+	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
 		return fmt.Errorf("provided data size for write action [%v] is larger than the max allowed data size of %v mb",
 			args.DownloadBufferId, common.ChunkMaxSizeInMb)
 	}
 
-	log.Info().Msgf("args.Replicas => %#v", args.Replicas)
+	// if the lease expires during upload update the frontend tp request for another one on that server
 	lease := cs.leases.PopFront()
 	if lease == nil || lease.IsExpired(time.Now()) {
-		return fmt.Errorf("could not acquire write lease / lease has expired")
+		reply.ErrorCode = common.LeaseExpired
+		return nil
 	}
 
 	n, err := performWrite(cs, lease.Expire, args, data)
@@ -1023,10 +1028,8 @@ func (cs *ChunkServer) RPCApplyMutationHandler(args rpc_struct.ApplyMutationArgs
 
 	// calculate the next offset from the previous cursor position
 	// assumption is that the data in the buffer is greater than 64 << 20
-	dataSize, err := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
-	if err != nil {
-		return err
-	}
+	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
+
 	if dataSize > common.ChunkMaxSizeInMb {
 		return fmt.Errorf("provided data size for append action [%v] is larger than the max allowed data size of %v mb", args.DownloadBufferId, common.ChunkMaxSizeInMb)
 	}
@@ -1042,7 +1045,7 @@ func (cs *ChunkServer) RPCApplyMutationHandler(args rpc_struct.ApplyMutationArgs
 	}
 
 	if chInfo.isCompressed {
-		err = cs.unarchiveChunks(handle)
+		err := cs.unarchiveChunks(handle)
 		if err != nil {
 			cs.mu.RUnlock()
 			return err
@@ -1105,10 +1108,7 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	var mutationType common.MutationType
 	offset := chInfo.length
 	newLength := chInfo.length + common.Offset(len(data))
-	dataSize, err := utils.BToMb(uint64(newLength))
-	if err != nil {
-		return err
-	}
+	dataSize := utils.BToMb(uint64(newLength))
 
 	if dataSize > common.ChunkMaxSizeInMb {
 		mutationType = common.MutationPad
@@ -1129,9 +1129,10 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	if err != nil {
 		return err
 	}
-	cs.mu.Lock()
-	chInfo.length = common.Offset(n)
-	cs.mu.Unlock()
+	cs.mu.RLock()
+	log.Info().Msgf("Chunk %v appended %d bytes, final length: %v", handle, n, chInfo.length)
+	cs.mu.RUnlock()
+
 	applyMutationArgs := rpc_struct.ApplyMutationArgs{
 		DownloadBufferId: args.DownloadBufferId,
 		MutationType:     mutationType,
@@ -1141,11 +1142,11 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	errs := make(chan error)
 	// forward a written call to all available secondary servers
 	go func() {
-		utils.ForEach(args.Replicas, func(addr common.ServerAddr) {
+		utils.ForEachInSlice(args.Replicas, func(addr common.ServerAddr) {
 			var applyMutationReply rpc_struct.ApplyMutationReply
 			err := shared.UnicastToRPCServer(
 				string(addr), rpc_struct.CRPCApplyMutationHandler,
-				applyMutationArgs, &applyMutationReply)
+				applyMutationArgs, &applyMutationReply, shared.DefaultRetryConfig)
 			if err != nil {
 				errs <- err
 			}
@@ -1201,7 +1202,7 @@ func (cs *ChunkServer) RPCGetSnapshotHandler(args rpc_struct.GetSnapshotArgs, re
 		Version: chInfo.version,
 	}
 
-	return shared.UnicastToRPCServer(string(args.Replicas), rpc_struct.CRPCApplyCopyHandler, applyCopyArgs, &r)
+	return shared.UnicastToRPCServer(string(args.Replicas), rpc_struct.CRPCApplyCopyHandler, applyCopyArgs, &r, shared.DefaultRetryConfig)
 }
 
 // RPCApplyCopyHandler handles an RPC request to apply a copy operation to a chunk on the ChunkServer.
@@ -1288,10 +1289,7 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 	}
 	cs.mu.Unlock()
 
-	dataSize, err := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
-	if err != nil {
-		return 0, err
-	}
+	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
 		return 0, fmt.Errorf("data size for chunk %v exceeds max size of %v MB", handle, common.ChunkMaxSizeInMb)
 	}
@@ -1301,8 +1299,6 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 		Offset:       args.Offset,
 	}
 
-	log.Info().Msgf("performing write mutation on chunk %v at offset %v with data size %v bytes", handle, args.Offset, len(data))
-	log.Info().Msgf("data  => %s", string(data))
 	n, err := cs.doMutate(handle, mutation)
 	if err != nil {
 		return 0, err
@@ -1339,7 +1335,7 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 					DownloadBufferId: args.DownloadBufferId,
 					MutationType:     common.MutationWrite,
 					Offset:           args.Offset,
-				}, &applyMutationReply)
+				}, &applyMutationReply, shared.DefaultRetryConfig)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to apply mutation to replica %v: %w", replicaAddr, err)
 			}
@@ -1365,7 +1361,11 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if chunk, exists := cs.chunks[args.DownloadBufferId.Handle]; exists {
-		chunk.length += common.Offset(len(data))
+		newLength := args.Offset + common.Offset(len(data))
+		if newLength > chunk.length {
+			chunk.length = newLength
+		}
+		log.Info().Msgf("Updated chunk %v length to %v bytes", args.DownloadBufferId.Handle, chunk.length)
 	} else {
 		return n, fmt.Errorf("chunk %v no longer exists on server %v", handle, cs.ServerAddr)
 	}
@@ -1417,7 +1417,7 @@ func (cs *ChunkServer) writeChunk(handle common.ChunkHandle, data []byte, mutati
 		return 0, fmt.Errorf("chunk %v on server %v does not exist", handle, cs.ServerAddr)
 	}
 
-	if mutationType != common.MutationWrite && mutationType != common.MutationAppend {
+	if mutationType != common.MutationWrite && mutationType != common.MutationAppend && mutationType != common.MutationPad {
 		return 0, fmt.Errorf("invalid mutation type for chunk %v: %v", handle, mutationType)
 	}
 
@@ -1480,10 +1480,21 @@ func (cs *ChunkServer) writeChunk(handle common.ChunkHandle, data []byte, mutati
 		chInfo.completed = true
 	}
 
+	if err := fs.Sync(); err != nil {
+		log.Err(err).Msgf("failed to sync chunk %v to disk", handle)
+	}
+
+	if _, err := fs.Seek(0, io.SeekStart); err != nil {
+		log.Err(err).Msgf("failed to seek to start for checksum calculation on chunk %v", handle)
+		log.Warn().Msgf("Checksum skipped for chunk %v due to seek error, but write succeeded", handle)
+		return int(newLen), err
+	}
+
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, fs); err != nil {
 		log.Err(err).Msgf("failed to read chunk %v for checksum", handle)
-		return 0, err
+		log.Warn().Msgf("Checksum calculation failed for chunk %v, but write succeeded", handle)
+		return int(newLen), nil
 	}
 	chInfo.checksum = common.Checksum(hasher.Sum(nil))
 	return int(newLen), nil
@@ -1529,8 +1540,8 @@ func (cs *ChunkServer) readChunk(handle common.ChunkHandle, offset common.Offset
 	return n, err
 }
 
-// calculateRoundTripProximity measures the average round-trip time (RTT) to a master server.
-// It executes a system ping command to the specified master address for a given duration (number of pings),
+// calculateRoundTripProximity measures the average round-trip time (RTT) to a server.
+// It executes a system ping command to the specified server address for a given duration (number of pings),
 // extracts the average RTT from the output, and returns it in milliseconds. The function is used in a
 // distributed storage system to assess network latency, likely for failure detection or server proximity
 // calculations (e.g., in heartBeat). It uses a context with a timeout to prevent hanging and sanitizes the
@@ -1549,14 +1560,14 @@ func (cs *ChunkServer) readChunk(handle common.ChunkHandle, offset common.Offset
 // Returns:
 //   - A float64 representing the average round-trip time in milliseconds.
 //   - An error if the ping command fails, the address is invalid, or RTT extraction fails.
-func calculateRoundTripProximity(duration int, masterAddr string) (float64, error) {
-	if !isValidAddr(masterAddr) {
-		return 0.0, fmt.Errorf("invalid master address: %s", masterAddr)
+func calculateRoundTripProximity(duration int, serverAddr string) (float64, error) {
+	if !isValidAddr(serverAddr) {
+		return 0.0, fmt.Errorf("invalid master address: %s", serverAddr)
 	}
 
-	host := strings.TrimSuffix(masterAddr, strings.SplitN(masterAddr, ":", 2)[1])
+	host := strings.TrimSuffix(serverAddr, strings.SplitN(serverAddr, ":", 2)[1])
 	if host == "" {
-		return 0.0, fmt.Errorf("could not extract host from address: %s", masterAddr)
+		return 0.0, fmt.Errorf("could not extract host from address: %s", serverAddr)
 	}
 
 	var buffer bytes.Buffer
@@ -1609,7 +1620,16 @@ func extractAverageRTT(output string) (float64, error) {
 	if len(match) < 2 {
 		return 0.0, fmt.Errorf("no avg RTT found in: %s", output)
 	}
-	return strconv.ParseFloat(match[1], 64)
+
+	avg := utils.Sum(utils.TransformSlice(
+		match, func(x string) float64 {
+			v, err := strconv.ParseFloat(match[1], 64)
+			if err != nil {
+				return 0.0
+			}
+			return v
+		}))
+	return avg / float64(len(match)), nil
 }
 
 // isValidAddr checks if the address is a valid IP or hostname, with or without port (basic validation).
