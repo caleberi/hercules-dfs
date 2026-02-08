@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -333,7 +332,6 @@ func (nm *NamespaceManager) MkDirAll(p common.Path) error {
 	}
 
 	fullPath := string(p)
-	log.Printf("fullPath:%s", fullPath)
 	dirPath, lastSegment := nm.RetrievePartitionFromPath(p)
 	targetPathStr := fullPath
 	if filepath.Ext(lastSegment) != "" {
@@ -351,19 +349,12 @@ func (nm *NamespaceManager) MkDirAll(p common.Path) error {
 		nextPath := filepath.Join(currentPath, seg)
 		currP := common.Path(nextPath)
 
-		// if _, err := nm.Get(currP); err == nil {
-		// 	currentPath = nextPath
-		// 	continue
-		// }
-
 		if err := nm.MkDir(currP); err != nil {
 			return err
 		}
 		currentPath = nextPath
 	}
 
-	log.Printf("currentPath:%s", currentPath)
-	log.Printf("Path:%s ?>", targetPathStr)
 	return nil
 }
 
@@ -376,11 +367,9 @@ func (nm *NamespaceManager) Get(p common.Path) (*NsTree, error) {
 	parents, cwd, err := nm.lockParents(common.Path(dirpath), false)
 	defer nm.unlockParents(parents, false)
 	if err != nil {
-		log.Println("SHITT")
 		return nil, err
 	}
 	if dir, ok := cwd.childrenNodes[filenameOrDirname]; ok {
-		log.Println("NICE")
 		return dir, nil
 	}
 	return nil, fmt.Errorf("node with path %s does not exist for %s", dirpath, filenameOrDirname)
@@ -568,5 +557,40 @@ func (nm *NamespaceManager) UpdateFileMetadata(p common.Path, length int64, chun
 	file.Length = length
 	file.Chunks = chunks
 
+	return nil
+}
+
+func (nm *NamespaceManager) RemoveDir(p common.Path) error {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	if string(p) == "" || string(p) == "/" {
+		return fmt.Errorf("cannot remove root directory")
+	}
+
+	dirpath, dirname := nm.RetrievePartitionFromPath(p)
+	if err := utils.ValidateFilename(dirname, p); err != nil {
+		return err
+	}
+
+	parents, cwd, err := nm.lockParents(common.Path(dirpath), true)
+	defer nm.unlockParents(parents, true)
+	if err != nil {
+		return err
+	}
+
+	node, ok := cwd.childrenNodes[dirname]
+	if !ok {
+		return fmt.Errorf("path does not %s exist", p)
+	}
+	if !node.IsDir {
+		return fmt.Errorf("%s is not a directory", p)
+	}
+
+	deletedNodeKey := fmt.Sprintf("%s%s", common.DeletedNamespaceFilePrefix, dirname)
+	node.Path = common.Path(deletedNodeKey)
+	cwd.childrenNodes[deletedNodeKey] = node
+	delete(cwd.childrenNodes, dirname)
+
+	nm.deleteCache[string(p)] = struct{}{}
 	return nil
 }
