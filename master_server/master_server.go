@@ -467,13 +467,7 @@ func (ma *MasterServer) RPCHeartBeatHandler(args rpc_struct.HeartBeatArgs, reply
 		reply.LeaseExtensions = newLeases
 	}
 
-	if !firstHeartBeat {
-		utils.ForEachInSlice(
-			reply.Garbage,
-			func(handle common.ChunkHandle) {
-				log.Info().Msgf(">> Forwarding Handle[%v] For Removal", handle)
-
-			})
+	if firstHeartBeat {
 		return nil
 	}
 

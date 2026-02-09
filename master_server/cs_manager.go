@@ -97,7 +97,9 @@ func (csm *ChunkServerManager) registerReplicas(
 		return fmt.Errorf("cannot find chunk %v", handle)
 	}
 
-	chunkInfo.locations = append(chunkInfo.locations, addr)
+	if !slices.Contains(chunkInfo.locations, addr) {
+		chunkInfo.locations = append(chunkInfo.locations, addr)
+	}
 	log.Info().Msgf(
 		"Registering replicas for handle=%v\n with location=%v\n data=%#v",
 		handle, chunkInfo.locations, chunkInfo)
@@ -150,14 +152,20 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 
 		chk.Lock()
 		chk.locations = utils.FilterSlice(
-			chk.locations,
-			func(v common.ServerAddr) bool {
-				return v != server
-			})
+			chk.locations, func(v common.ServerAddr) bool { return v != server })
 		chk.expire = time.Now()
-		num := len(chk.locations) //  calulate the number of chunk replica if it is less that the
+		num := len(chk.locations) //  calculate the number of chunk replica if it is less that the
 		// the replication factor which is ususally 3 then we need more server to fulfill this
 		chk.Unlock()
+
+		csm.serverMutex.RLock()
+		sv := csm.servers[server]
+		csm.serverMutex.RUnlock()
+		if sv != nil {
+			sv.Lock()
+			delete(sv.chunks, handle)
+			sv.Unlock()
+		}
 
 		if num < common.MinimumReplicationFactor {
 			csm.replicaMigration = append(csm.replicaMigration, handle)
@@ -170,10 +178,8 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 
 	})
 
-	errStr := strings.Join(errs, ";")
-
 	if len(errs) != 0 {
-		return errors.New(errStr)
+		return errors.New(strings.Join(errs, ";"))
 	}
 	return nil
 }
@@ -259,15 +265,22 @@ func (csm *ChunkServerManager) replicationMigration() []common.ChunkHandle {
 	csm.Lock()
 	defer csm.Unlock()
 
+	if len(csm.replicaMigration) == 0 {
+		return nil
+	}
+
 	slices.Sort(csm.replicaMigration)
-	csm.replicaMigration = make([]common.ChunkHandle, 0)
-	for i, v := range csm.replicaMigration {
-		if i == 0 || v != common.ChunkHandle(csm.replicaMigration[i-1]) { // avoid duplicate
-			csm.replicaMigration = append(csm.replicaMigration, common.ChunkHandle(v))
+	unique := make([]common.ChunkHandle, 0, len(csm.replicaMigration))
+	var last common.ChunkHandle
+	for i, h := range csm.replicaMigration {
+		if i == 0 || h != last {
+			unique = append(unique, h)
+			last = h
 		}
 	}
 
-	return csm.replicaMigration
+	csm.replicaMigration = make([]common.ChunkHandle, 0)
+	return unique
 }
 
 func (csm *ChunkServerManager) extendLease(handle common.ChunkHandle, primary common.ServerAddr) (*chunkInfo, error) {
@@ -552,10 +565,9 @@ func (csm *ChunkServerManager) HeartBeat(addr common.ServerAddr, info common.Mac
 	srv.Lock()
 	defer srv.Unlock()
 	if reply.Garbage == nil {
-		reply.Garbage = make([]common.ChunkHandle, 0)
+		reply.Garbage = make([]common.ChunkHandle, 0, len(srv.garbages))
 	}
-	copy(reply.Garbage, srv.garbages)
-
+	reply.Garbage = append(reply.Garbage[:0], srv.garbages...)
 	srv.garbages = make([]common.ChunkHandle, 0)
 	srv.lastHeatBeat = time.Now()
 	reply.LastHeartBeat = srv.lastHeatBeat

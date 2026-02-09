@@ -73,8 +73,9 @@ type ChunkServer struct {
 	downloadBuffer  *downloadbuffer.DownloadBuffer  // buffer for handling downloads
 	failureDetector *detector.FailureDetector       // detector for identifying node failures
 
-	garbage utils.Deque[common.ChunkHandle]   // deque of chunks marked for garbage collection
-	chunks  map[common.ChunkHandle]*chunkInfo // map of chunk handles to their metadata
+	garbageMu sync.Mutex                        // mutex for synchronizing access to the garbage collection list
+	garbage   utils.Deque[common.ChunkHandle]   // deque of chunks marked for garbage collection
+	chunks    map[common.ChunkHandle]*chunkInfo // map of chunk handles to their metadata
 
 	isDead       bool           // indicates if the server is marked as dead
 	shutdownChan chan os.Signal // channel for handling shutdown signals
@@ -491,9 +492,11 @@ func (cs *ChunkServer) heartBeat() error {
 	}
 
 	if reply.Garbage != nil {
+		cs.garbageMu.Lock()
 		utils.ForEachInSlice(reply.Garbage, func(handle common.ChunkHandle) {
 			cs.garbage.PushBack(handle)
 		})
+		cs.garbageMu.Unlock()
 	}
 	prediction, err := cs.failureDetector.PredictFailure()
 	if err != nil {
@@ -576,6 +579,9 @@ func (cs *ChunkServer) persistMetadata() error {
 //     processing of the garbage list.
 //   - Note: Individual deletion errors are logged for debugging.
 func (cs *ChunkServer) garbageCollection() error {
+	cs.garbageMu.Lock()
+	defer cs.garbageMu.Unlock()
+
 	log.Info().Msg("::: Doing some garbage collection >>> ")
 	for range cs.garbage.Length() {
 		handle := cs.garbage.PopFront()
