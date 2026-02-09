@@ -408,18 +408,23 @@ func (cs *ChunkServer) loadMetadata() error {
 	decoder := library.NewDecoder(file)
 	err = decoder.Decode(&metas)
 	if err != nil {
-		if !errors.Is(err, io.EOF) {
-			log.Err(err).Msg(fmt.Sprintf("Server %s failed to decode metadata; attempting recovery", cs.ServerAddr))
-			corruptName := fmt.Sprintf("%s.corrupt.%d", common.ChunkMetaDataFileName, time.Now().Unix())
-			if renameErr := cs.rootDir.Rename(common.ChunkMetaDataFileName, corruptName); renameErr != nil {
-				log.Err(renameErr).Msg("failed to rename corrupt chunk metadata")
-				return err
-			}
-			if createErr := cs.rootDir.CreateFile(common.ChunkMetaDataFileName); createErr != nil {
-				return createErr
-			}
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
+
+		log.Err(err).Msgf("Server %s failed to decode metadata; attempting recovery", cs.ServerAddr)
+
+		_ = file.Close()
+		corruptName := fmt.Sprintf("%s.corrupt.%d", common.ChunkMetaDataFileName, time.Now().Unix())
+		if renameErr := cs.rootDir.Rename(common.ChunkMetaDataFileName, corruptName); renameErr != nil {
+			log.Err(renameErr).Msg("failed to rename corrupt chunk metadata")
+			return err
+		}
+		if createErr := cs.rootDir.CreateFile(common.ChunkMetaDataFileName); createErr != nil {
+			return createErr
+		}
+		return nil
+
 	}
 
 	log.Info().Msg(fmt.Sprintf("Server %s found metas with length %d", cs.ServerAddr, len(metas)))
