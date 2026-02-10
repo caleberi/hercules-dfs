@@ -257,7 +257,7 @@ func (g *HerculesHTTPGateway) handleCreateFile(c *gin.Context) {
 	var err error
 	if dirPath != "/" && dirPath != "." {
 		g.mu.Lock()
-		err = g.client.MkDir(common.Path(req.Path))
+		err = g.client.MkDir(common.Path(dirPath))
 		g.mu.Unlock()
 		if err != nil {
 			g.respondError(c, http.StatusInternalServerError, err)
