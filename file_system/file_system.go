@@ -53,11 +53,21 @@ func getFileInfo(p string) (fs.FileInfo, error) {
 }
 
 func (fs *FileSystem) restrictToRoot(path string) (string, error) {
-	path = filepath.Join(fs.root, filepath.Clean(path))
-	if !strings.HasPrefix(path, fs.root) {
-		return "", fmt.Errorf("provided path %s is restricted to the filesystem root", path)
+	cleaned := filepath.Clean(path)
+	if !filepath.IsAbs(cleaned) {
+		cleaned = filepath.Join(fs.root, cleaned)
 	}
-	return path, nil
+
+	rel, err := filepath.Rel(fs.root, cleaned)
+	if err != nil {
+		return "", err
+	}
+
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %s is outside of root %s", path, fs.root)
+	}
+
+	return filepath.Join(fs.root, rel), nil
 }
 
 // MkDir creates a directory at the specified path relative to the root.
