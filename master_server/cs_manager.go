@@ -62,7 +62,10 @@ func (csm *ChunkServerManager) getReplicas(handle common.ChunkHandle) ([]common.
 		return nil, fmt.Errorf("could not retrieve replica for chunk(%v)", handle)
 	}
 
-	return chunkInfo.locations, nil
+	locations := make([]common.ServerAddr, len(chunkInfo.locations))
+	copy(locations, chunkInfo.locations)
+
+	return locations, nil
 }
 
 // registerReplicas adds a server address to the list of replicas for a given chunk handle.
@@ -507,24 +510,48 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 }
 
 func (csm *ChunkServerManager) chooseReplicationServer(handle common.ChunkHandle) (from, to common.ServerAddr, err error) {
-	csm.serverMutex.RLock()
-	defer csm.serverMutex.RUnlock()
-
 	from = ""
 	to = ""
-	err = nil
-	for a, v := range csm.servers {
-		if v.chunks[handle] {
-			from = a
-		} else {
-			to = a
-		}
-		if from != "" && to != "" {
-			return
+
+	locations, err := csm.getReplicas(handle)
+	if err != nil {
+		return "", "", err
+	}
+
+	liveServers := csm.GetLiveServers()
+	if len(liveServers) == 0 {
+		return "", "", fmt.Errorf("no live server for replica %v", handle)
+	}
+
+	liveSet := make(map[common.ServerAddr]bool, len(liveServers))
+	for _, addr := range liveServers {
+		liveSet[addr] = true
+	}
+
+	locationsSet := make(map[common.ServerAddr]bool, len(locations))
+	for _, addr := range locations {
+		locationsSet[addr] = true
+		if from == "" && liveSet[addr] {
+			from = addr
 		}
 	}
-	err = fmt.Errorf("no enough server for replica %v", handle)
-	return
+
+	if from == "" {
+		return "", "", fmt.Errorf("no live replica for %v", handle)
+	}
+
+	for _, addr := range liveServers {
+		if !locationsSet[addr] {
+			to = addr
+			break
+		}
+	}
+
+	if to == "" {
+		return "", "", fmt.Errorf("no available target for replica %v", handle)
+	}
+
+	return from, to, nil
 }
 
 func (csm *ChunkServerManager) SerializeChunks() []serialChunkInfo {
