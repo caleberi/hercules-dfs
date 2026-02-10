@@ -116,7 +116,7 @@ func (hercules *HerculesClient) GetChunkServers(handle common.ChunkHandle) (*com
 	}
 
 	if newLease.IsExpired(time.Now()) {
-		return nil, fmt.Errorf("GetChunkServers = %v has expired before use", lease)
+		return nil, fmt.Errorf("GetChunkServers = %v has expired before use", newLease)
 	}
 
 	hercules.cacheMux.Lock()
@@ -225,7 +225,8 @@ func (hercules *HerculesClient) CreateFile(path common.Path) error {
 //   - An error if the RPC call fails.
 func (hercules *HerculesClient) List(path common.Path) ([]common.PathInfo, error) {
 	reply := &rpc_struct.GetPathInfoReply{}
-	err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCListHandler, rpc_struct.GetPathInfoArgs{}, reply, shared.DefaultRetryConfig)
+	err := shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCListHandler,
+		rpc_struct.GetPathInfoArgs{Path: path}, reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -351,8 +352,10 @@ func (hercules *HerculesClient) Read(path common.Path, offset common.Offset, dat
 		pos += n
 	}
 
-	if err != nil && err.(common.Error).Code == common.ReadEOF {
-		return pos, io.EOF
+	if err != nil {
+		if err.(common.Error).Code == common.ReadEOF {
+			return pos, io.EOF
+		}
 	}
 
 	return pos, err
@@ -522,7 +525,9 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 		return -1, err
 	}
 	servers := append(writeLease.Secondaries, writeLease.Primary)
-	copy(utils.FilterSlice(servers, func(v common.ServerAddr) bool { return string(v) != "" }), servers)
+	servers = utils.FilterSlice(servers,
+		func(v common.ServerAddr) bool { return string(v) != "" })
+
 	if len(servers) == 0 {
 		return -1, common.Error{Code: common.UnknownError, Err: "no replica"}
 	}
@@ -685,6 +690,9 @@ func (hercules *HerculesClient) AppendChunk(handle common.ChunkHandle, data []by
 	}
 
 	if appendLease.Primary == "" {
+		if len(appendLease.Secondaries) == 0 {
+			return offset, common.Error{Code: common.NotAvailableForCopy, Err: "no replicas available for append"}
+		}
 		appendLease.Primary = appendLease.Secondaries[0]
 		appendLease.Secondaries = appendLease.Secondaries[1:]
 	}
