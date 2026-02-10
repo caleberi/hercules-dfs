@@ -281,7 +281,7 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 // Returns nil if all chunks are processed successfully, or a combined error if any failures occur.
 func (cs *ChunkServer) archiveChunks() error {
 	checkAccessTime := func(value *chunkInfo) bool {
-		return time.Until(value.accessTime).Hours()/24 > common.ArchivalDaySpan
+		return time.Since(value.accessTime).Hours()/24 > common.ArchivalDaySpan
 	}
 	cs.mu.Lock()
 	chunksToArchive := utils.ExtractFromMap(cs.chunks, checkAccessTime)
@@ -995,21 +995,33 @@ func (cs *ChunkServer) RPCWriteChunkHandler(args rpc_struct.WriteChunkArgs, repl
 			args.DownloadBufferId, common.ChunkMaxSizeInMb)
 	}
 
-	// if the lease expires during upload update the frontend tp request for another one on that server
-	lease := cs.leases.PopFront()
-	if lease == nil || lease.IsExpired(time.Now()) {
+	var selected *common.Lease
+	leases := cs.leases.PopAllReverse()
+	for i := len(leases) - 1; i >= 0; i-- {
+		lease := leases[i]
+		if lease == nil {
+			continue
+		}
+		if lease.Handle == args.DownloadBufferId.Handle && selected == nil {
+			selected = lease
+			continue
+		}
+		cs.leases.PushBack(lease)
+	}
+
+	if selected == nil || selected.IsExpired(time.Now()) {
 		reply.ErrorCode = common.LeaseExpired
 		return nil
 	}
 
-	n, err := performWrite(cs, lease.Expire, args, data)
+	n, err := performWrite(cs, selected.Expire, args, data)
 	if err != nil {
 		return err
 	}
 	reply.Length = n
 
-	if !lease.IsExpired(time.Now()) {
-		cs.leases.PushFront(lease)
+	if !selected.IsExpired(time.Now()) {
+		cs.leases.PushBack(selected)
 	}
 	return nil
 }
@@ -1054,15 +1066,14 @@ func (cs *ChunkServer) RPCApplyMutationHandler(args rpc_struct.ApplyMutationArgs
 		cs.mu.RUnlock()
 		return fmt.Errorf("%v is either abandoned or lives in another dimension", handle)
 	}
+	cs.mu.RUnlock()
 
 	if chInfo.isCompressed {
 		err := cs.unarchiveChunks(handle)
 		if err != nil {
-			cs.mu.RUnlock()
 			return err
 		}
 	}
-	cs.mu.RUnlock()
 	mutation := &common.Mutation{
 		MutationType: args.MutationType,
 		Data:         data,
@@ -1193,14 +1204,13 @@ func (cs *ChunkServer) RPCGetSnapshotHandler(args rpc_struct.GetSnapshotArgs, re
 		cs.mu.RUnlock()
 		return fmt.Errorf("chunk %v does not exist or is abandoned", handle)
 	}
-
+	cs.mu.RUnlock()
 	if chInfo.isCompressed {
 		if err := cs.unarchiveChunks(handle); err != nil {
-			cs.mu.RUnlock()
 			return err
 		}
 	}
-	cs.mu.RUnlock()
+
 	data := make([]byte, chInfo.length)
 	if _, err := cs.readChunk(handle, 0, data); err != nil {
 		return err
@@ -1291,14 +1301,12 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 		cs.mu.Unlock()
 		return 0, fmt.Errorf("chunk %v on server %v is completed and cannot be written", handle, cs.ServerAddr)
 	}
-
+	cs.mu.Unlock()
 	if chInfo.isCompressed {
 		if err := cs.unarchiveChunks(handle); err != nil {
-			cs.mu.Unlock()
 			return 0, err
 		}
 	}
-	cs.mu.Unlock()
 
 	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
