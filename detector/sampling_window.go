@@ -72,10 +72,6 @@ func (sw *SamplingWindow[T]) clean(ctx context.Context) error {
 		return fmt.Errorf("failed to get window size: %w", err)
 	}
 
-	if card < int64(sw.size) {
-		return nil
-	}
-
 	query := &redis.ZRangeBy{Min: "-inf", Max: fmt.Sprintf("%d", time.Now().UnixMilli())}
 	expired, err := sw.rdb.ZRangeByScore(ctx, expiredWindowKey, query).Result()
 	if err != nil {
@@ -156,7 +152,7 @@ func (sw *SamplingWindow[T]) Add(ctx context.Context, entry T) error {
 
 	if card > int64(sw.size) {
 		numToRemove := card - int64(sw.size)
-		oldest, err := sw.rdb.ZRange(ctx, expKey, 0, numToRemove-1).Result()
+		oldest, err := sw.rdb.ZRange(ctx, mainKey, 0, numToRemove-1).Result()
 		if err != nil {
 			return fmt.Errorf("failed to query oldest for size enforcement: %w", err)
 		}
