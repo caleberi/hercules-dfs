@@ -28,6 +28,7 @@ type ServerOpts struct {
 	EnableTls                    bool          // Whether to enable TLS for secure connections
 	MaxHeaderBytes               int           // Maximum size of request headers in bytes
 	ReadHeaderTimeout            time.Duration // Timeout for reading request headers
+	ReadTimeout                  time.Duration // Timeout for reading the entire request
 	WriteTimeout                 time.Duration // Timeout for writing responses
 	IdleTimeout                  time.Duration // Timeout for idle connections
 	DisableGeneralOptionsHandler bool          // Whether to disable the default OPTIONS handler
@@ -129,12 +130,17 @@ func (s *Server) Serve() error {
 	if !s.Opts.UseColorizedLogger {
 		logger = s.ExternalLogger
 	}
+
 	s.server = &http.Server{
 		MaxHeaderBytes:               s.Opts.MaxHeaderBytes,
 		Addr:                         string(s.Address),
 		Handler:                      s.Mux,
 		DisableGeneralOptionsHandler: s.Opts.DisableGeneralOptionsHandler,
 		ErrorLog:                     s.errorLogger,
+		ReadHeaderTimeout:            s.Opts.ReadHeaderTimeout,
+		ReadTimeout:                  s.Opts.ReadTimeout,
+		WriteTimeout:                 s.Opts.WriteTimeout,
+		IdleTimeout:                  s.Opts.IdleTimeout,
 	}
 
 	if s.Opts.EnableTls {
@@ -210,7 +216,10 @@ func (s *Server) Serve() error {
 // It triggers the server's shutdown process, which is handled by the Serve method.
 func (s *Server) Shutdown() {
 	s.shutdownOnce.Do(func() {
-		s.shutdownChannel <- syscall.SIGTERM
+		select {
+		case s.shutdownChannel <- syscall.SIGTERM:
+		default:
+		}
 	})
 }
 
