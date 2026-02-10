@@ -199,8 +199,10 @@ func (downloadBuffer *DownloadBuffer) FetchAndDelete(bufId common.BufferId) ([]b
 // Done signals the buffer to stop its background cleanup routine.
 // It sends a signal to the done channel, causing the cleanup goroutine to exit gracefully.
 func (downloadBuffer *DownloadBuffer) Done() {
-	select {
-	case downloadBuffer.done <- true:
-	default:
-	}
+	sync.OnceFunc(func() {
+		select {
+		case downloadBuffer.done <- true:
+		default:
+		}
+	})
 }
