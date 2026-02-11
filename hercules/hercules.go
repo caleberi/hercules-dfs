@@ -461,6 +461,12 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 	for pos < len(data) {
 		index := common.Offset(offset / common.ChunkMaxSizeInByte)
 		chunkOffset := offset % common.ChunkMaxSizeInByte
+		if index >= common.Offset(reply.Chunks) {
+			info, err := hercules.GetFile(args.Path)
+			if err == nil {
+				reply.Chunks = info.Chunks
+			}
+		}
 		handle, err := hercules.GetChunkHandle(args.Path, common.ChunkIndex(index))
 		if err != nil {
 			return -1, err
@@ -473,9 +479,25 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 		} else {
 			writeLength = writeMax
 		}
-		n, err := hercules.WriteChunk(handle, chunkOffset, data[pos:pos+writeLength])
-		if err != nil {
-			return -1, err
+		var n int
+		for attempt := range 2 {
+			n, err = hercules.WriteChunk(handle, chunkOffset, data[pos:pos+writeLength])
+			if err == nil {
+				break
+			}
+			if opErr, ok := err.(common.Error); ok && opErr.Code == common.WriteExceedChunkSize {
+				index++
+				offset = common.Offset(index) * common.ChunkMaxSizeInByte
+				chunkOffset = 0
+				n = 0
+				break
+			}
+			if opErr, ok := err.(common.Error); !ok || opErr.Code != common.LeaseExpired || attempt == 1 {
+				return -1, err
+			}
+		}
+		if err != nil && n == 0 && chunkOffset == 0 {
+			continue
 		}
 		offset += common.Offset(writeLength)
 		pos += n
@@ -519,73 +541,84 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 	if totalDataLengthToWrite > common.ChunkMaxSizeInByte {
 		return -1, fmt.Errorf("totalDataLengthToWrite = %v is greater than the max chunk size %v", totalDataLengthToWrite, common.ChunkMaxSizeInByte)
 	}
-
-	writeLease, offset, err := hercules.ObtainLease(handle, offset)
-	if err != nil {
-		return -1, err
-	}
-	servers := append(writeLease.Secondaries, writeLease.Primary)
-	servers = utils.FilterSlice(servers,
-		func(v common.ServerAddr) bool { return string(v) != "" })
-
-	if len(servers) == 0 {
-		return -1, common.Error{Code: common.UnknownError, Err: "no replica"}
-	}
-
-	if writeLease.Primary == "" {
-		writeLease.Primary = servers[0]
-		servers = servers[1:]
-	}
-
-	dataID := downloadbuffer.NewDownloadBufferId(handle)
-
-	var errs []string
-	utils.ForEachInSlice(servers, func(addr common.ServerAddr) {
-		var d rpc_struct.ForwardDataReply
-		if addr != "" {
-			replicas := utils.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
-			err = shared.UnicastToRPCServer(string(addr),
-				rpc_struct.CRPCForwardDataHandler,
-				rpc_struct.ForwardDataArgs{
-					DownloadBufferId: dataID,
-					Data:             data,
-					Replicas:         replicas,
-				}, &d, shared.DefaultRetryConfig)
-			if err != nil {
-				errs = append(errs, err.Error())
-			}
+	for attempt := 0; attempt < 3; attempt++ {
+		writeLease, nextOffset, err := hercules.ObtainLease(handle, offset)
+		if err != nil {
+			return -1, err
 		}
-	})
-	if len(errs) != 0 {
-		errStr := strings.Join(errs, ";")
-		log.Err(errors.New(errStr)).Stack()
+		offset = nextOffset
+
+		servers := append(writeLease.Secondaries, writeLease.Primary)
+		servers = utils.FilterSlice(servers,
+			func(v common.ServerAddr) bool { return string(v) != "" })
+
+		if len(servers) == 0 {
+			return -1, common.Error{Code: common.UnknownError, Err: "no replica"}
+		}
+
+		if writeLease.Primary == "" {
+			writeLease.Primary = servers[0]
+			servers = servers[1:]
+		}
+
+		dataID := downloadbuffer.NewDownloadBufferId(handle)
+
+		var errs []string
+		utils.ForEachInSlice(servers, func(addr common.ServerAddr) {
+			var d rpc_struct.ForwardDataReply
+			if addr != "" {
+				replicas := utils.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
+				err = shared.UnicastToRPCServer(string(addr),
+					rpc_struct.CRPCForwardDataHandler,
+					rpc_struct.ForwardDataArgs{
+						DownloadBufferId: dataID,
+						Data:             data,
+						Replicas:         replicas,
+					}, &d, shared.DefaultRetryConfig)
+				if err != nil {
+					errs = append(errs, err.Error())
+				}
+			}
+		})
+		if len(errs) != 0 {
+			errStr := strings.Join(errs, ";")
+			log.Err(errors.New(errStr)).Stack()
+		}
+
+		writeArgs := rpc_struct.WriteChunkArgs{
+			DownloadBufferId: dataID,
+			Offset:           offset,
+			Replicas:         servers,
+		}
+
+		writeReply := &rpc_struct.WriteChunkReply{}
+		err = shared.UnicastToRPCServer(
+			string(writeLease.Primary),
+			rpc_struct.CRPCWriteChunkHandler,
+			writeArgs,
+			writeReply,
+			shared.DefaultRetryConfig,
+		)
+		if err != nil {
+			return -1, err
+		}
+		if writeReply.ErrorCode == common.WriteExceedChunkSize {
+			return -1, common.Error{Code: common.WriteExceedChunkSize, Err: "chunk full"}
+		}
+		if writeReply.ErrorCode == common.LeaseExpired {
+			hercules.cacheMux.Lock()
+			delete(hercules.cache, handle)
+			hercules.cacheMux.Unlock()
+			if attempt == 0 {
+				continue
+			}
+			return -1, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
+		}
+
+		return writeReply.Length, nil
 	}
 
-	writeArgs := rpc_struct.WriteChunkArgs{
-		DownloadBufferId: dataID,
-		Offset:           offset,
-		Replicas:         servers,
-	}
-
-	writeReply := &rpc_struct.WriteChunkReply{}
-	err = shared.UnicastToRPCServer(
-		string(writeLease.Primary),
-		rpc_struct.CRPCWriteChunkHandler,
-		writeArgs,
-		writeReply,
-		shared.DefaultRetryConfig,
-	)
-	if err != nil {
-		return -1, err
-	}
-	if writeReply.ErrorCode == common.LeaseExpired {
-		hercules.cacheMux.Lock()
-		delete(hercules.cache, handle)
-		hercules.cacheMux.Unlock()
-		return -1, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
-	}
-
-	return writeReply.Length, nil
+	return -1, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
 }
 
 // Append appends the given data to the end of the file at the specified path.
@@ -611,7 +644,9 @@ func (hercules *HerculesClient) Append(path common.Path, data []byte) (offset co
 	args := rpc_struct.GetFileInfoArgs{Path: path}
 	reply := rpc_struct.GetFileInfoReply{}
 
-	err = shared.UnicastToRPCServer(string(hercules.master), rpc_struct.MRPCGetFileInfoHandler, args, &reply, shared.DefaultRetryConfig)
+	err = shared.UnicastToRPCServer(
+		string(hercules.master), rpc_struct.MRPCGetFileInfoHandler,
+		args, &reply, shared.DefaultRetryConfig)
 	if err != nil {
 		return -1, err
 	}
@@ -623,7 +658,6 @@ func (hercules *HerculesClient) Append(path common.Path, data []byte) (offset co
 		handle      common.ChunkHandle
 		chunkOffset common.Offset
 	)
-
 	for {
 		handle, err = hercules.GetChunkHandle(args.Path, common.ChunkIndex(start))
 		if err != nil {
@@ -642,7 +676,6 @@ func (hercules *HerculesClient) Append(path common.Path, data []byte) (offset co
 		break
 	}
 	offset = common.Offset(start)*common.ChunkMaxSizeInByte + chunkOffset
-
 	newLength := offset + common.Offset(len(data))
 	newChunks := int64(start + 1)
 	updateArgs := rpc_struct.UpdateFileMetadataArgs{
@@ -684,47 +717,61 @@ func (hercules *HerculesClient) AppendChunk(handle common.ChunkHandle, data []by
 		}
 	}
 
-	appendLease, offset, err := hercules.ObtainLease(handle, 0)
-	if err != nil {
-		return offset, err
-	}
-
-	if appendLease.Primary == "" {
-		if len(appendLease.Secondaries) == 0 {
-			return offset, common.Error{Code: common.NotAvailableForCopy, Err: "no replicas available for append"}
+	for attempt := range 2 {
+		appendLease, nextOffset, err := hercules.ObtainLease(handle, 0)
+		if err != nil {
+			return offset, err
 		}
-		appendLease.Primary = appendLease.Secondaries[0]
-		appendLease.Secondaries = appendLease.Secondaries[1:]
-	}
+		offset = nextOffset
 
-	dataID := downloadbuffer.NewDownloadBufferId(handle)
-	forwardReply := rpc_struct.ForwardDataReply{}
-	err = shared.UnicastToRPCServer(string(appendLease.Primary),
-		rpc_struct.CRPCForwardDataHandler,
-		rpc_struct.ForwardDataArgs{
+		if appendLease.Primary == "" {
+			if len(appendLease.Secondaries) == 0 {
+				return offset, common.Error{Code: common.NotAvailableForCopy, Err: "no replicas available for append"}
+			}
+			appendLease.Primary = appendLease.Secondaries[0]
+			appendLease.Secondaries = appendLease.Secondaries[1:]
+		}
+
+		dataID := downloadbuffer.NewDownloadBufferId(handle)
+		forwardReply := rpc_struct.ForwardDataReply{}
+		err = shared.UnicastToRPCServer(string(appendLease.Primary),
+			rpc_struct.CRPCForwardDataHandler,
+			rpc_struct.ForwardDataArgs{
+				DownloadBufferId: dataID,
+				Data:             data,
+				Replicas:         appendLease.Secondaries,
+			}, &forwardReply, shared.DefaultRetryConfig)
+		if err != nil {
+			return offset, err
+		}
+
+		appendArgs := rpc_struct.AppendChunkArgs{
 			DownloadBufferId: dataID,
-			Data:             data,
-			Replicas:         appendLease.Secondaries,
-		}, &forwardReply, shared.DefaultRetryConfig)
-	if err != nil {
-		return offset, err
+			Replicas:         appendLease.Secondaries}
+		appendReply := rpc_struct.AppendChunkReply{}
+		err = shared.UnicastToRPCServer(
+			string(appendLease.Primary),
+			rpc_struct.CRPCAppendChunkHandler, appendArgs, &appendReply, shared.DefaultRetryConfig)
+		if err != nil {
+			return offset, common.Error{Code: common.UnknownError, Err: err.Error()}
+		}
+		if appendReply.ErrorCode == common.LeaseExpired {
+			hercules.cacheMux.Lock()
+			delete(hercules.cache, handle)
+			hercules.cacheMux.Unlock()
+			if attempt == 0 {
+				continue
+			}
+			return offset, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
+		}
+		if appendReply.ErrorCode == common.AppendExceedChunkSize {
+			return appendReply.Offset, common.Error{
+				Code: common.AppendExceedChunkSize,
+				Err:  "exceed append chunk size",
+			}
+		}
+		return appendReply.Offset, nil
 	}
 
-	appendArgs := rpc_struct.AppendChunkArgs{
-		DownloadBufferId: dataID,
-		Replicas:         appendLease.Secondaries}
-	appendReply := rpc_struct.AppendChunkReply{}
-	err = shared.UnicastToRPCServer(
-		string(appendLease.Primary),
-		rpc_struct.CRPCAppendChunkHandler, appendArgs, &appendReply, shared.DefaultRetryConfig)
-	if err != nil {
-		return offset, common.Error{Code: common.UnknownError, Err: err.Error()}
-	}
-	if appendReply.ErrorCode == common.AppendExceedChunkSize {
-		return appendReply.Offset, common.Error{
-			Code: common.AppendExceedChunkSize,
-			Err:  "exceed append chunk size",
-		}
-	}
-	return appendReply.Offset, nil
+	return offset, common.Error{Code: common.LeaseExpired, Err: "lease expired"}
 }
