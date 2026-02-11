@@ -41,13 +41,25 @@ const isCodeFile = (filename) => {
 };
 
 // Video Player Component
-const VideoPlayer = ({ src, onClose, serverInfo }) => {
+const VideoPlayer = ({ src, srcKind, onClose, serverInfo }) => {
   const videoRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    setPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    video.pause();
+    if (srcKind !== 'mse') {
+      video.load();
+    }
+  }, [src, srcKind]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -258,6 +270,7 @@ export default function PhotoLibrary() {
   const [leaseCache, setLeaseCache] = useState({});
   const [showMediaModal, setShowMediaModal] = useState(false);
   const [mediaSrc, setMediaSrc] = useState(null);
+  const [mediaSrcKind, setMediaSrcKind] = useState('blob');
   const [currentMediaPath, setCurrentMediaPath] = useState(null);
   const [serverInfo, setServerInfo] = useState(null);
   const [streamProgress, setStreamProgress] = useState(null);
@@ -522,17 +535,59 @@ export default function PhotoLibrary() {
         console.log(`  - APPEND_MAX: ${APPEND_MAX} bytes`);
 
         let filePosition = 0;
+        const fullChunks = Math.floor(file.size / CHUNK_SIZE);
 
-        while (filePosition < file.size) {
-          const remaining = file.size - filePosition;
-          const useAppend = filePosition >= CHUNK_SIZE;
-          const bytesToSend = useAppend
-            ? Math.min(APPEND_MAX, remaining)
-            : Math.min(CHUNK_SIZE - filePosition, remaining);
-          const blobSlice = file.slice(filePosition, filePosition + bytesToSend);
+        for (let chunkIndex = 0; chunkIndex < fullChunks; chunkIndex++) {
+          const offset = chunkIndex * CHUNK_SIZE;
+          const blobSlice = file.slice(offset, offset + CHUNK_SIZE);
           const chunkData = new Uint8Array(await blobSlice.arrayBuffer());
 
-          if (useAppend) {
+          let leaseRetry = 0;
+          while (true) {
+            const writeUrl = `${API_BASE}/write?path=${encodeURIComponent(fileName)}&offset=${offset}`;
+            console.log(`[UPLOAD] POST ${writeUrl} (${chunkData.length} bytes)`);
+
+            const writeResponse = await fetch(writeUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: chunkData
+            });
+
+            const writeResult = await writeResponse.json();
+            if (!writeResponse.ok) {
+              const errorCode = Number(writeResult.Code ?? writeResult.code ?? 0);
+              if (errorCode === LEASE_EXPIRED_CODE && leaseRetry < 1) {
+                leaseRetry += 1;
+                showNotification('Lease refreshed, retrying...', 'info');
+                continue;
+              }
+              throw new Error(`Failed to write: ${writeResult.Error || writeResult.error}`);
+            }
+
+            const reportedWritten = writeResult.data?.bytes_written;
+            const bytesWritten = Math.min(chunkData.length, reportedWritten || chunkData.length);
+            if (bytesWritten <= 0) {
+              throw new Error('Write returned 0 bytes written');
+            }
+            filePosition = offset + bytesWritten;
+            break;
+          }
+
+          setUploadProgress({
+            current: i,
+            total: files.length,
+            currentFile: file.name,
+            bytesUploaded: filePosition,
+            totalBytes: file.size
+          });
+        }
+
+        const remaining = file.size - filePosition;
+        if (remaining > 0) {
+          const blobSlice = file.slice(filePosition, filePosition + remaining);
+          const chunkData = new Uint8Array(await blobSlice.arrayBuffer());
+
+          if (remaining <= APPEND_MAX) {
             const appendUrl = `${API_BASE}/append?path=${encodeURIComponent(fileName)}`;
             console.log(`[UPLOAD] PATCH ${appendUrl} (${chunkData.length} bytes)`);
 
@@ -584,15 +639,15 @@ export default function PhotoLibrary() {
               break;
             }
           }
-
-          setUploadProgress({
-            current: i,
-            total: files.length,
-            currentFile: file.name,
-            bytesUploaded: filePosition,
-            totalBytes: file.size
-          });
         }
+
+        setUploadProgress({
+          current: i,
+          total: files.length,
+          currentFile: file.name,
+          bytesUploaded: filePosition,
+          totalBytes: file.size
+        });
 
         console.log(`✓✓✓ Successfully uploaded ${file.name}: ${filePosition} bytes`);
         
@@ -663,183 +718,301 @@ export default function PhotoLibrary() {
       
       setStreamProgress({ loaded: 0, total: fileLength, currentChunk: 0, totalChunks: numChunks });
 
-      // Step 2: Obtain leases for all chunks (get all server locations first)
-      console.log('\n[READ] Step 2: Obtaining leases for all chunks...');
-      const chunkLeases = [];
-      for (let i = 0; i < numChunks; i++) {
-        try {
-          const lease = await obtainLease(mediaPath, i);
-          if (!lease) {
-            throw new Error(`Failed to obtain lease for chunk ${i}`);
-          }
-          chunkLeases.push(lease);
-          console.log(`✓ Lease ${i}: handle=${lease.handle}, primary=${lease.primary}, replicas=${lease.secondaries?.length || 0}`);
-        } catch (err) {
-          console.error(`[READ] Failed to get lease for chunk ${i}:`, err);
-          throw err;
-        }
-      }
-
-      // Display server info for first chunk
-      const firstLease = chunkLeases[0];
-      const selectedServer = selectServerForRead(firstLease);
-      
-      setServerInfo({
-        primary: firstLease.primary,
-        secondaries: firstLease.secondaries,
-        selectedForRead: selectedServer,
-        handle: firstLease.handle,
-        totalChunks: numChunks,
-        fileSize: fileLength,
-        allChunkLocations: chunkLeases.map((lease, idx) => ({
-          chunk: idx,
-          handle: lease.handle,
-          replicas: 1 + (lease.secondaries?.length || 0)
-        }))
-      });
-
-      console.log(`\n[READ] Step 3: Reading ${numChunks} chunk(s)...`);
-
-      // Step 3: Stream read all chunks and place by chunk index
-      const assembled = new Uint8Array(fileLength);
-      let totalBytesRead = 0;
-
-      for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
-        console.log(`\n[READ] Processing chunk ${chunkIndex}/${numChunks - 1}:`);
-        
-        // Step 3a: Select server for this chunk (load balancing across replicas)
-        const lease = chunkLeases[chunkIndex];
-        const server = selectServerForRead(lease);
-        
-        if (!server) {
-          throw new Error(`No server available for chunk ${chunkIndex}`);
-        }
-        
-        console.log(`  - Selected server: ${server}`);
-        console.log(`  - Lease info: handle=${lease.handle}, primary=${lease.primary}`);
-        
-        // Step 3b: CRITICAL - Calculate actual bytes to read from this chunk
-        const bytesReadSoFar = chunkIndex * CHUNK_SIZE;
-        const bytesRemainingInFile = fileLength - bytesReadSoFar;
-        const bytesToReadFromThisChunk = Math.min(CHUNK_SIZE, bytesRemainingInFile);
-        
-        console.log(`  - Bytes read so far: ${bytesReadSoFar}`);
-        console.log(`  - Bytes remaining in file: ${bytesRemainingInFile}`);
-        console.log(`  - Bytes to read from this chunk: ${bytesToReadFromThisChunk}`);
-        
-        if (bytesToReadFromThisChunk <= 0) {
-          console.warn(`  - No bytes to read from chunk ${chunkIndex}, stopping`);
-          break;
-        }
-        
-        // Step 3c: Read only the actual data from this chunk
-        const offset = chunkIndex * CHUNK_SIZE;
-        const readUrl = `${API_BASE}/read?path=${encodeURIComponent(mediaPath)}&offset=${offset}&length=${bytesToReadFromThisChunk}`;
-        
-        console.log(`[READ] Request: ${readUrl}`);
-        
-        const response = await fetch(readUrl);
-        
-        console.log(`[READ] Response status: ${response.status} ${response.statusText}`);
-        
-        if (!response.ok) {
-          let error;
+      const readMediaAsBlob = async () => {
+        console.log('\n[READ] Step 2: Obtaining leases for all chunks...');
+        const chunkLeases = [];
+        for (let i = 0; i < numChunks; i++) {
           try {
-            error = await response.json();
-          // eslint-disable-next-line no-unused-vars
-          } catch (e) {
-            error = { error: response.statusText };
+            const lease = await obtainLease(mediaPath, i);
+            if (!lease) {
+              throw new Error(`Failed to obtain lease for chunk ${i}`);
+            }
+            chunkLeases.push(lease);
+            console.log(`✓ Lease ${i}: handle=${lease.handle}, primary=${lease.primary}, replicas=${lease.secondaries?.length || 0}`);
+          } catch (err) {
+            console.error(`[READ] Failed to get lease for chunk ${i}:`, err);
+            throw err;
           }
-          console.error(`[READ] Error response:`, error);
-          throw new Error(`Failed to read chunk ${chunkIndex}: ${error.error || response.statusText}`);
         }
 
-        const chunkData = await response.arrayBuffer();
-        console.log(`[READ] Received chunk data: ${chunkData.byteLength} bytes`);
-        
-        // Verify we got the expected amount
-        if (chunkData.byteLength !== bytesToReadFromThisChunk) {
-          console.warn(`[READ] WARNING: Expected ${bytesToReadFromThisChunk} bytes but got ${chunkData.byteLength} bytes`);
-        }
-        
-        const chunkBytes = new Uint8Array(chunkData);
-        assembled.set(chunkBytes, offset);
-        totalBytesRead += chunkBytes.byteLength;
-        
-        // Step 3d: Update progress
-        setStreamProgress({ 
-          loaded: totalBytesRead, 
-          total: fileLength,
-          currentChunk: chunkIndex + 1,
-          totalChunks: numChunks
+        const firstLease = chunkLeases[0];
+        const selectedServer = selectServerForRead(firstLease);
+
+        setServerInfo({
+          primary: firstLease.primary,
+          secondaries: firstLease.secondaries,
+          selectedForRead: selectedServer,
+          handle: firstLease.handle,
+          totalChunks: numChunks,
+          fileSize: fileLength,
+          allChunkLocations: chunkLeases.map((lease, idx) => ({
+            chunk: idx,
+            handle: lease.handle,
+            replicas: 1 + (lease.secondaries?.length || 0)
+          }))
         });
-        
-        console.log(`✓ Chunk ${chunkIndex}: ${chunkData.byteLength} bytes read`);
-        console.log(`  - Progress: ${totalBytesRead}/${fileLength} bytes (${((totalBytesRead/fileLength)*100).toFixed(1)}%)`);
-      }
 
-      // Step 4: Finalize assembled file (based on chunk indices)
-      console.log(`\n[READ] Step 4: Finalizing ${numChunks} chunk(s)...`);
-      console.log(`  - Total assembled size: ${totalBytesRead} bytes`);
-      const finalData = assembled.slice(0, totalBytesRead);
+        console.log(`\n[READ] Step 3: Reading ${numChunks} chunk(s)...`);
 
-      // Step 5: Render media
-      console.log('[READ] Step 5: Creating blob and rendering...');
-      const mimeType = isVid
-        ? 'video/mp4'
-        : isImg
-        ? 'image/*'
-        : isPdf
-        ? 'application/pdf'
-        : isText
-        ? 'text/plain'
-        : 'application/octet-stream';
-      const blob = new Blob([finalData], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      
-      console.log(`  - Blob size: ${blob.size} bytes`);
-      console.log(`  - Blob type: ${blob.type}`);
+        const assembled = new Uint8Array(fileLength);
+        let totalBytesRead = 0;
 
-      if (isVid || isImg) {
-        setMediaSrc(url);
+        for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+          console.log(`\n[READ] Processing chunk ${chunkIndex}/${numChunks - 1}:`);
+
+          const lease = chunkLeases[chunkIndex];
+          const server = selectServerForRead(lease);
+
+          if (!server) {
+            throw new Error(`No server available for chunk ${chunkIndex}`);
+          }
+
+          console.log(`  - Selected server: ${server}`);
+          console.log(`  - Lease info: handle=${lease.handle}, primary=${lease.primary}`);
+
+          const bytesReadSoFar = chunkIndex * CHUNK_SIZE;
+          const bytesRemainingInFile = fileLength - bytesReadSoFar;
+          const bytesToReadFromThisChunk = Math.min(CHUNK_SIZE, bytesRemainingInFile);
+
+          console.log(`  - Bytes read so far: ${bytesReadSoFar}`);
+          console.log(`  - Bytes remaining in file: ${bytesRemainingInFile}`);
+          console.log(`  - Bytes to read from this chunk: ${bytesToReadFromThisChunk}`);
+
+          if (bytesToReadFromThisChunk <= 0) {
+            console.warn(`  - No bytes to read from chunk ${chunkIndex}, stopping`);
+            break;
+          }
+
+          const offset = chunkIndex * CHUNK_SIZE;
+          const readUrl = `${API_BASE}/read?path=${encodeURIComponent(mediaPath)}&offset=${offset}&length=${bytesToReadFromThisChunk}`;
+
+          console.log(`[READ] Request: ${readUrl}`);
+
+          const response = await fetch(readUrl);
+
+          console.log(`[READ] Response status: ${response.status} ${response.statusText}`);
+
+          if (!response.ok) {
+            let error;
+            try {
+              error = await response.json();
+            } catch {
+              error = { error: response.statusText };
+            }
+            console.error(`[READ] Error response:`, error);
+            throw new Error(`Failed to read chunk ${chunkIndex}: ${error.error || response.statusText}`);
+          }
+
+          const chunkData = await response.arrayBuffer();
+          console.log(`[READ] Received chunk data: ${chunkData.byteLength} bytes`);
+
+          if (chunkData.byteLength !== bytesToReadFromThisChunk) {
+            console.warn(`[READ] WARNING: Expected ${bytesToReadFromThisChunk} bytes but got ${chunkData.byteLength} bytes`);
+          }
+
+          const chunkBytes = new Uint8Array(chunkData);
+          assembled.set(chunkBytes, offset);
+          totalBytesRead = Math.max(totalBytesRead, offset + chunkBytes.byteLength);
+
+          setStreamProgress({
+            loaded: totalBytesRead,
+            total: fileLength,
+            currentChunk: chunkIndex + 1,
+            totalChunks: numChunks
+          });
+
+          console.log(`✓ Chunk ${chunkIndex}: ${chunkData.byteLength} bytes read`);
+          console.log(`  - Progress: ${totalBytesRead}/${fileLength} bytes (${((totalBytesRead / fileLength) * 100).toFixed(1)}%)`);
+        }
+
+        console.log(`\n[READ] Step 4: Finalizing ${numChunks} chunk(s)...`);
+        console.log(`  - Total assembled size: ${totalBytesRead} bytes`);
+        const finalData = assembled.slice(0, Math.min(fileLength, totalBytesRead));
+
+        console.log('[READ] Step 5: Creating blob and rendering...');
+        const mimeType = isVid
+          ? 'video/mp4'
+          : isImg
+          ? 'image/*'
+          : isPdf
+          ? 'application/pdf'
+          : isText
+          ? 'text/plain'
+          : 'application/octet-stream';
+        const blob = new Blob([finalData], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+
+        console.log(`  - Blob size: ${blob.size} bytes`);
+        console.log(`  - Blob type: ${blob.type}`);
+
+        if (isVid || isImg) {
+          setMediaSrc(url);
+          setMediaSrcKind('blob');
+          setCurrentMediaPath(mediaPath);
+          setDocPreviewType('none');
+          setDocPreviewText('');
+          setShowMediaModal(true);
+          console.log(`✓✓✓ ${isVid ? 'Video' : 'Photo'} loaded and rendered successfully`);
+          showNotification(`${isVid ? 'Video' : 'Photo'} loaded successfully`);
+        } else if (isPdf) {
+          setMediaSrc(url);
+          setMediaSrcKind('blob');
+          setCurrentMediaPath(mediaPath);
+          setDocPreviewType('pdf');
+          setDocPreviewText('');
+          setShowMediaModal(true);
+          showNotification('PDF loaded successfully');
+        } else if (isText || isCode) {
+          const limited = finalData.slice(0, MAX_TEXT_PREVIEW_BYTES);
+          const decoder = new TextDecoder('utf-8');
+          const text = decoder.decode(limited);
+          setMediaSrc(null);
+          setMediaSrcKind('blob');
+          setCurrentMediaPath(mediaPath);
+          setDocPreviewType(isCode ? 'code' : 'text');
+          setDocPreviewText(text);
+          setShowMediaModal(true);
+          if (finalData.length > MAX_TEXT_PREVIEW_BYTES) {
+            showNotification('Text preview truncated to 200KB');
+          } else {
+            showNotification('Text loaded successfully');
+          }
+        } else {
+          const fileName = mediaPath.split('/').pop() || 'download';
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          link.click();
+          URL.revokeObjectURL(url);
+          showNotification(`Downloaded ${fileName}`);
+        }
+
+        setStreamProgress(null);
+      };
+
+      if (isVid) {
+        let firstLease = null;
+        try {
+          firstLease = await obtainLease(mediaPath, 0);
+        } catch (err) {
+          console.warn('[READ] Could not obtain initial lease for video:', err);
+        }
+
+        if (firstLease) {
+          const selectedServer = selectServerForRead(firstLease);
+          setServerInfo({
+            primary: firstLease.primary,
+            secondaries: firstLease.secondaries,
+            selectedForRead: selectedServer,
+            handle: firstLease.handle,
+            totalChunks: numChunks,
+            fileSize: fileLength,
+            allChunkLocations: [{
+              chunk: 0,
+              handle: firstLease.handle,
+              replicas: 1 + (firstLease.secondaries?.length || 0)
+            }]
+          });
+        }
+
+        const mimeCandidates = [
+          'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+          'video/mp4'
+        ];
+        const mimeType = mimeCandidates.find(type => window.MediaSource?.isTypeSupported(type)) || 'video/mp4';
+
+        const mediaSource = new MediaSource();
+        const objectUrl = URL.createObjectURL(mediaSource);
+        setMediaSrc(objectUrl);
+        setMediaSrcKind('mse');
         setCurrentMediaPath(mediaPath);
         setDocPreviewType('none');
         setDocPreviewText('');
         setShowMediaModal(true);
-        console.log(`✓✓✓ ${isVid ? 'Video' : 'Photo'} loaded and rendered successfully`);
-        showNotification(`${isVid ? 'Video' : 'Photo'} loaded successfully`);
-      } else if (isPdf) {
-        setMediaSrc(url);
-        setCurrentMediaPath(mediaPath);
-        setDocPreviewType('pdf');
-        setDocPreviewText('');
-        setShowMediaModal(true);
-        showNotification('PDF loaded successfully');
-      } else if (isText || isCode) {
-        const limited = finalData.slice(0, MAX_TEXT_PREVIEW_BYTES);
-        const decoder = new TextDecoder('utf-8');
-        const text = decoder.decode(limited);
-        setMediaSrc(null);
-        setCurrentMediaPath(mediaPath);
-        setDocPreviewType(isCode ? 'code' : 'text');
-        setDocPreviewText(text);
-        setShowMediaModal(true);
-        if (finalData.length > MAX_TEXT_PREVIEW_BYTES) {
-          showNotification('Text preview truncated to 200KB');
-        } else {
-          showNotification('Text loaded successfully');
-        }
-      } else {
-        const fileName = mediaPath.split('/').pop() || 'download';
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        link.click();
-        URL.revokeObjectURL(url);
-        showNotification(`Downloaded ${fileName}`);
+        showNotification('Video streaming started');
+
+        const streamChunks = async () => {
+          const sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+          let totalBytesRead = 0;
+
+          const waitForUpdate = () => new Promise((resolve, reject) => {
+            const handleEnd = () => {
+              sourceBuffer.removeEventListener('updateend', handleEnd);
+              sourceBuffer.removeEventListener('error', handleError);
+              resolve();
+            };
+            const handleError = () => {
+              sourceBuffer.removeEventListener('updateend', handleEnd);
+              sourceBuffer.removeEventListener('error', handleError);
+              reject(new Error('SourceBuffer error'));
+            };
+            sourceBuffer.addEventListener('updateend', handleEnd);
+            sourceBuffer.addEventListener('error', handleError);
+          });
+
+          for (let chunkIndex = 0; chunkIndex < numChunks; chunkIndex++) {
+            const bytesReadSoFar = chunkIndex * CHUNK_SIZE;
+            const bytesRemainingInFile = fileLength - bytesReadSoFar;
+            const bytesToReadFromThisChunk = Math.min(CHUNK_SIZE, bytesRemainingInFile);
+
+            if (bytesToReadFromThisChunk <= 0) {
+              break;
+            }
+
+            const offset = chunkIndex * CHUNK_SIZE;
+            const readUrl = `${API_BASE}/read?path=${encodeURIComponent(mediaPath)}&offset=${offset}&length=${bytesToReadFromThisChunk}`;
+            console.log(`[READ] Request: ${readUrl}`);
+
+            const response = await fetch(readUrl);
+            if (!response.ok) {
+              let error;
+              try {
+                error = await response.json();
+              } catch {
+                error = { error: response.statusText };
+              }
+              throw new Error(`Failed to read chunk ${chunkIndex}: ${error.error || response.statusText}`);
+            }
+
+            const chunkData = await response.arrayBuffer();
+            sourceBuffer.appendBuffer(new Uint8Array(chunkData));
+            await waitForUpdate();
+
+            totalBytesRead += chunkData.byteLength;
+            setStreamProgress({
+              loaded: totalBytesRead,
+              total: fileLength,
+              currentChunk: chunkIndex + 1,
+              totalChunks: numChunks
+            });
+          }
+
+          if (mediaSource.readyState === 'open') {
+            mediaSource.endOfStream();
+          }
+          setStreamProgress(null);
+        };
+
+        mediaSource.addEventListener('sourceopen', () => {
+          streamChunks().catch((err) => {
+            console.error('[READ] Streaming error:', err);
+            showNotification('Streaming failed, falling back to full download', 'error');
+            if (mediaSource.readyState === 'open') {
+              mediaSource.endOfStream('network');
+            }
+            setStreamProgress(null);
+            readMediaAsBlob().catch((fallbackErr) => {
+              console.error('[READ] Fallback error:', fallbackErr);
+              showNotification(`Failed to stream video: ${fallbackErr.message}`, 'error');
+            });
+          });
+        }, { once: true });
+
+        return;
       }
 
-      setStreamProgress(null);
+      // Step 2: Obtain leases for all chunks (get all server locations first)
+      await readMediaAsBlob();
       
     } catch (err) {
       console.error('[READ] Fatal error:', err);
@@ -1364,6 +1537,7 @@ export default function PhotoLibrary() {
                     URL.revokeObjectURL(mediaSrc);
                   }
                   setMediaSrc(null);
+                  setMediaSrcKind('blob');
                   setCurrentMediaPath(null);
                   setServerInfo(null);
                   setIsVideo(false);
@@ -1377,7 +1551,7 @@ export default function PhotoLibrary() {
             </div>
             
             {isVideo ? (
-              <VideoPlayer src={mediaSrc} onClose={() => setShowMediaModal(false)} serverInfo={serverInfo} />
+              <VideoPlayer src={mediaSrc} srcKind={mediaSrcKind} onClose={() => setShowMediaModal(false)} serverInfo={serverInfo} />
             ) : (
               <>
                 <div className="flex items-center justify-center bg-black/50 rounded-lg p-4 mb-4">
