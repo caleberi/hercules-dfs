@@ -852,7 +852,7 @@ func (cs *ChunkServer) RPCReadChunkHandler(args rpc_struct.ReadChunkArgs, reply 
 	reply.Data = make([]byte, args.Length)
 	chInfo.RLock()
 	n, err := cs.readChunk(args.Handle, args.Offset, reply.Data)
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		chInfo.RUnlock()
 		log.Err(err).Stack().Send()
 		return err
@@ -864,7 +864,7 @@ func (cs *ChunkServer) RPCReadChunkHandler(args rpc_struct.ReadChunkArgs, reply 
 	chInfo.accessTime = time.Now()
 	chInfo.Unlock()
 
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		reply.ErrorCode = common.ReadEOF
 		return nil
 	}
@@ -956,6 +956,7 @@ func (cs *ChunkServer) RPCGrantLeaseHandler(args rpc_struct.GrantLeaseInfoArgs, 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.leases.PushBack(&common.Lease{
+		Handle:      args.Handle,
 		Expire:      args.Expire,
 		Primary:     args.Primary,
 		Secondaries: args.Secondaries,
@@ -991,8 +992,8 @@ func (cs *ChunkServer) RPCWriteChunkHandler(args rpc_struct.WriteChunkArgs, repl
 	// assumption is that the data in the buffer is greated than 64 << 20
 	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
-		return fmt.Errorf("provided data size for write action [%v] is larger than the max allowed data size of %v mb",
-			args.DownloadBufferId, common.ChunkMaxSizeInMb)
+		reply.ErrorCode = common.WriteExceedChunkSize
+		return nil
 	}
 
 	var selected *common.Lease
@@ -1016,6 +1017,10 @@ func (cs *ChunkServer) RPCWriteChunkHandler(args rpc_struct.WriteChunkArgs, repl
 
 	n, err := performWrite(cs, selected.Expire, args, data)
 	if err != nil {
+		if strings.Contains(err.Error(), "completed") || strings.Contains(err.Error(), "exceeds max size") {
+			reply.ErrorCode = common.WriteExceedChunkSize
+			return nil
+		}
 		return err
 	}
 	reply.Length = n
