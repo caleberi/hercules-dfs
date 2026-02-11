@@ -30,8 +30,9 @@ Hercules is a distributed file system that faithfully implements the Google File
 
 https://github.com/user-attachments/assets/5cb81239-33ed-4429-a654-c5fa508730fc
 
-
 https://github.com/user-attachments/assets/faf3553a-ace8-402b-8e81-9515685d9ad6
+
+https://github.com/user-attachments/assets/396b6f89-95a3-4ab8-9814-51b3caeb1f78
 
 
 ### Why Hercules?
@@ -453,6 +454,7 @@ Special thanks to:
 [⬆ Back to Top](#hercules-distributed-file-system)
 
 </div>
+
 
 
 
