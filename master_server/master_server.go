@@ -29,10 +29,10 @@ import (
 
 type chunkServerInfo struct {
 	sync.RWMutex
-	lastHeatBeat time.Time
-	chunks       map[common.ChunkHandle]bool
-	garbages     []common.ChunkHandle
-	serverInfo   common.MachineInfo
+	lastHeartBeat time.Time
+	chunks        map[common.ChunkHandle]bool
+	garbages      []common.ChunkHandle
+	serverInfo    common.MachineInfo
 }
 
 type chunkInfo struct {
@@ -233,26 +233,6 @@ func (ma *MasterServer) serverHeartBeat() error {
 		}
 	}
 
-	//  deadserver have nothing to do with the replication logic
-	handles := ma.chunkServerManager.replicationMigration()
-	utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
-		if ck, ok := ma.chunkServerManager.getChunk(handle); ok {
-			if ck.expire.Before(time.Now()) {
-				ck.Lock() // don't grant lease during copy
-				log.Info().Msgf("Replication in progress >>> for handle [%v] chunk [%v]", handle, ck)
-				err := ma.performReplication(handle)
-				if err != nil {
-					log.Err(err).Stack().Msg(err.Error())
-					ck.Unlock()
-					return
-				}
-				ck.Unlock()
-			}
-			return
-		}
-
-	})
-
 	// perform a broadcast to all servers to get there health status for failure detection
 	allServers := utils.TransformSlice(
 		ma.chunkServerManager.GetLiveServers(),
@@ -276,16 +256,34 @@ func (ma *MasterServer) serverHeartBeat() error {
 			errs = append(errs, err)
 			continue
 		}
+		ma.chunkServerManager.markServerLive(common.ServerAddr(addr), time.Now())
 
 		reply.NetworkData.BackwardTrip.ReceivedAt = time.Now()
-		if err := ma.detector.RecordSample(reply.NetworkData); err != nil {
-			log.Err(err).Stack().Msg("err storing network data for prediction")
+		if ma.detector != nil {
+			if err := ma.detector.RecordSample(reply.NetworkData); err != nil {
+				log.Err(err).Stack().Msg("err storing network data for prediction")
+			}
 		}
 	}
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
+
+	//  deadserver have nothing to do with the replication logic
+	handles := ma.chunkServerManager.replicationMigration()
+	utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
+		if ck, ok := ma.chunkServerManager.getChunk(handle); ok {
+			log.Info().Msgf("Replication in progress >>> for handle [%v] chunk [%v]", handle, ck)
+			err := ma.performReplication(handle)
+			if err != nil {
+				log.Err(err).Stack().Msg(err.Error())
+				ma.chunkServerManager.queueReplication(handle)
+				return
+			}
+			return
+		}
+	})
 
 	return nil
 }
