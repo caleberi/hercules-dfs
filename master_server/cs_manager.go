@@ -55,15 +55,17 @@ func NewChunkServerManager() *ChunkServerManager {
 //   - An error if the chunk handle is not found in the chunks map.
 func (csm *ChunkServerManager) getReplicas(handle common.ChunkHandle) ([]common.ServerAddr, error) {
 	csm.chunkMutex.RLock()
-	chunkInfo, ok := csm.chunks[handle]
-	csm.chunkMutex.RUnlock()
+	defer csm.chunkMutex.RUnlock()
 
+	chunkInfo, ok := csm.chunks[handle]
 	if !ok {
 		return nil, fmt.Errorf("could not retrieve replica for chunk(%v)", handle)
 	}
 
 	locations := make([]common.ServerAddr, len(chunkInfo.locations))
+	chunkInfo.RLock()
 	copy(locations, chunkInfo.locations)
+	chunkInfo.RUnlock()
 
 	return locations, nil
 }
@@ -100,9 +102,11 @@ func (csm *ChunkServerManager) registerReplicas(
 		return fmt.Errorf("cannot find chunk %v", handle)
 	}
 
+	chunkInfo.Lock()
 	if !slices.Contains(chunkInfo.locations, addr) {
 		chunkInfo.locations = append(chunkInfo.locations, addr)
 	}
+	chunkInfo.Unlock()
 	log.Info().Msgf(
 		"Registering replicas for handle=%v\n with location=%v\n data=%#v",
 		handle, chunkInfo.locations, chunkInfo)
@@ -121,7 +125,7 @@ func (csm *ChunkServerManager) detectDeadServer() []common.ServerAddr {
 
 	deadServers := make([]common.ServerAddr, 0, len(csm.servers))
 	for serverAddr, chk := range csm.servers {
-		if chk.lastHeatBeat.IsZero() || time.Now().After(chk.lastHeatBeat.Add(common.ServerHealthCheckTimeout)) {
+		if chk.lastHeartBeat.IsZero() || time.Since(chk.lastHeartBeat) >= common.ServerHealthCheckTimeout {
 			deadServers = append(deadServers, serverAddr)
 		}
 	}
@@ -581,10 +585,10 @@ func (csm *ChunkServerManager) HeartBeat(addr common.ServerAddr, info common.Mac
 	if !ok {
 		log.Info().Msg(fmt.Sprintf("adding new server %v to master", addr))
 		csm.servers[addr] = &chunkServerInfo{
-			lastHeatBeat: time.Now(),
-			garbages:     make([]common.ChunkHandle, 0),
-			chunks:       make(map[common.ChunkHandle]bool),
-			serverInfo:   info,
+			lastHeartBeat: time.Now(),
+			garbages:      make([]common.ChunkHandle, 0),
+			chunks:        make(map[common.ChunkHandle]bool),
+			serverInfo:    info,
 		}
 		return true
 	}
@@ -596,8 +600,8 @@ func (csm *ChunkServerManager) HeartBeat(addr common.ServerAddr, info common.Mac
 	}
 	reply.Garbage = append(reply.Garbage[:0], srv.garbages...)
 	srv.garbages = make([]common.ChunkHandle, 0)
-	srv.lastHeatBeat = time.Now()
-	reply.LastHeartBeat = srv.lastHeatBeat
+	srv.lastHeartBeat = time.Now()
+	reply.LastHeartBeat = srv.lastHeartBeat
 
 	return false
 }
@@ -683,15 +687,32 @@ func (csm *ChunkServerManager) UpdateFilePath(source common.Path, target common.
 }
 
 func (csm *ChunkServerManager) GetLiveServers() []common.ServerAddr {
-	csm.serverMutex.Lock()
-	defer csm.serverMutex.Unlock()
+	csm.serverMutex.RLock()
+	defer csm.serverMutex.RUnlock()
 
 	allServers := make([]common.ServerAddr, 0, len(csm.servers))
 	utils.IterateOverMap(csm.servers, func(serverAddr common.ServerAddr, chunk *chunkServerInfo) {
-		if !chunk.lastHeatBeat.IsZero() && time.Now().Before(chunk.lastHeatBeat.Add(common.ServerHealthCheckTimeout)) {
+		if !chunk.lastHeartBeat.IsZero() && time.Since(chunk.lastHeartBeat) < common.ServerHealthCheckTimeout {
 			allServers = append(allServers, serverAddr)
 		}
 	})
 
 	return allServers
+}
+
+func (csm *ChunkServerManager) markServerLive(addr common.ServerAddr, t time.Time) {
+	csm.serverMutex.Lock()
+	defer csm.serverMutex.Unlock()
+
+	if srv, ok := csm.servers[addr]; ok {
+		srv.Lock()
+		srv.lastHeartBeat = t
+		srv.Unlock()
+	}
+}
+
+func (csm *ChunkServerManager) queueReplication(handle common.ChunkHandle) {
+	csm.Lock()
+	defer csm.Unlock()
+	csm.replicaMigration = append(csm.replicaMigration, handle)
 }
