@@ -317,7 +317,5 @@ volumes:
 
 networks:
   hercules-net:
+    name: hercules-net
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.25.0.0/16
