@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
@@ -53,21 +52,22 @@ func getFileInfo(p string) (fs.FileInfo, error) {
 }
 
 func (fs *FileSystem) restrictToRoot(path string) (string, error) {
-	cleaned := filepath.Clean(path)
-	if !filepath.IsAbs(cleaned) {
-		cleaned = filepath.Join(fs.root, cleaned)
-	}
+	fullPath := filepath.Join(fs.root, filepath.Clean("/"+path))
 
-	rel, err := filepath.Rel(fs.root, cleaned)
+	realPath, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
-		return "", err
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		realPath = fullPath
 	}
 
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path %s is outside of root %s", path, fs.root)
+	_, err = filepath.Rel(fs.root, realPath)
+	if err != nil {
+		return "", fmt.Errorf("path escapes root: %s", realPath)
 	}
 
-	return filepath.Join(fs.root, rel), nil
+	return realPath, nil
 }
 
 // MkDir creates a directory at the specified path relative to the root.
@@ -139,9 +139,6 @@ func (fs *FileSystem) GetStat(path string) (fs.FileInfo, error) {
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, err
-		}
 		return nil, err
 	}
 
@@ -173,19 +170,21 @@ func (fs *FileSystem) Rename(oldPath, newPath string) error {
 		return err
 	}
 
-	if _, err := getFileInfo(oldPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("old path %s does not exist", oldPath)
-		}
-		return err
+	steps := []struct {
+		fn  func(error) bool
+		err error
+	}{
+		{fn: os.IsNotExist, err: fmt.Errorf("old path %s does not exist", oldPath)},
+		{fn: os.IsExist, err: fmt.Errorf("new path %s already exist", oldPath)},
 	}
 
-	if _, err := getFileInfo(newPath); err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("new path %s already exist", oldPath)
+	for _, step := range steps {
+		if _, err := getFileInfo(oldPath); err != nil {
+			if step.fn(err) {
+				return step.err
+			}
 		}
 	}
-
 	return os.Rename(oldPath, newPath)
 }
 
@@ -207,12 +206,14 @@ func (fs *FileSystem) CreateFile(path string) error {
 	}
 
 	info, err := getFileInfo(path)
-	if info != nil && info.Mode().IsRegular() {
-		return fmt.Errorf("path %s already exists", path)
-	} else if err != nil {
+	if err != nil {
 		if os.IsExist(err) {
 			return fmt.Errorf("path %s already exists", path)
 		}
+	}
+
+	if info != nil && info.Mode().IsRegular() {
+		return fmt.Errorf("path %s already exists", path)
 	}
 
 	file, err := os.Create(path)

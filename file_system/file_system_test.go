@@ -6,13 +6,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/caleberi/distributed-system/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// setupTestFS creates a new FileSystem instance with a temporary root directory
-// and returns a cleanup function to remove the directory after the test.
-// It uses require to fail the test immediately if setup fails.
 func setupTestFS(t *testing.T) (*FileSystem, func()) {
 	t.Helper()
 	root, err := os.MkdirTemp("", "fs-test-*")
@@ -24,40 +22,20 @@ func setupTestFS(t *testing.T) (*FileSystem, func()) {
 }
 
 func TestCreateDir(t *testing.T) {
-	type testCase struct {
-		name       string
-		paths      []string
-		shouldFail bool
+	fs, cleanup := setupTestFS(t)
+	defer cleanup()
+
+	paths := []string{
+		".", "",
+		"../.",
+		"test1", "test1/app_1",
+		"test1/app_2", "test1/app_1/test2",
+		"test3/.op/../../../../k",
 	}
 
-	tests := []testCase{
-		{
-			name:       "Valid Paths",
-			paths:      []string{".", "", "test1", "test1/app_1", "test1/app_2", "test1/app_1/test2"},
-			shouldFail: false,
-		},
-		{
-			name:       "Invalid Paths (Path Traversal)",
-			paths:      []string{"../.", "test3/.op/../../../k"},
-			shouldFail: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			fs, cleanup := setupTestFS(t)
-			defer cleanup()
-
-			for _, p := range tc.paths {
-				err := fs.MkDir(p)
-				if tc.shouldFail {
-					assert.Error(t, err, "expected error for path %s", p)
-					return
-				}
-				assert.NoError(t, err, "failed to create directory %s", p)
-			}
-		})
-	}
+	utils.ForEachInSlice(paths, func(p string) {
+		assert.NoError(t, fs.MkDir(p))
+	})
 }
 
 func TestCreateFile(t *testing.T) {
@@ -67,13 +45,12 @@ func TestCreateFile(t *testing.T) {
 	paths := []string{"test1.txt", "dir1/test2.txt", "dir1/subdir/test3.txt"}
 	require.NoError(t, fs.MkDir("dir1/subdir"), "failed to create parent directories")
 
-	for _, p := range paths {
-		err := fs.CreateFile(p)
-		assert.NoError(t, err, "failed to create file %s", p)
+	utils.ForEachInSlice(paths, func(p string) {
+		assert.NoError(t, fs.CreateFile(p), "failed to create file %s", p)
 		info, err := fs.GetStat(p)
 		assert.NoError(t, err, "failed to stat file %s", p)
 		assert.True(t, info.Mode().IsRegular(), "path %s is not a regular file", p)
-	}
+	})
 
 	err := fs.CreateFile(paths[0])
 	log.Printf("%s", err)
@@ -86,16 +63,15 @@ func TestDeleteFile(t *testing.T) {
 
 	paths := []string{"test1.txt", "dir1/test2.txt", "dir1/subdir/test3.txt"}
 	require.NoError(t, fs.MkDir("dir1/subdir"), "failed to create parent directories")
-	for _, p := range paths {
+	utils.ForEachInSlice(paths, func(p string) {
 		require.NoError(t, fs.CreateFile(p), "failed to create file %s", p)
-	}
+	})
 
-	for _, p := range paths {
-		err := fs.RemoveFile(p)
-		assert.NoError(t, err, "failed to remove file %s", p)
-		_, err = fs.GetStat(p)
+	utils.ForEachInSlice(paths, func(p string) {
+		assert.NoError(t, fs.RemoveFile(p), "failed to remove file %s", p)
+		_, err := fs.GetStat(p)
 		assert.Error(t, err, "expected error when stating deleted file %s", p)
-	}
+	})
 	err := fs.RemoveFile("nonexistent.txt")
 	assert.Error(t, err, "expected error when deleting nonexistent file")
 }
@@ -136,8 +112,7 @@ func TestRename(t *testing.T) {
 	assert.True(t, info.Mode().IsRegular(), "renamed path is not a regular file")
 
 	require.NoError(t, fs.MkDir("olddir"), "failed to create directory")
-	err = fs.Rename("olddir", "newdir")
-	assert.NoError(t, err, "failed to rename directory")
+	assert.NoError(t, fs.Rename("olddir", "newdir"), "failed to rename directory")
 
 	_, err = fs.GetStat("olddir")
 	assert.Error(t, err, "expected error when stating renamed directory")
@@ -148,9 +123,6 @@ func TestRename(t *testing.T) {
 	assert.True(t, info.IsDir(), "renamed path is not a directory")
 
 	require.NoError(t, fs.CreateFile("existing.txt"), "failed to create existing file")
-	err = fs.Rename("new.txt", "existing.txt")
-	assert.NoError(t, err, "expected error when renaming to existing path")
-
-	err = fs.Rename("nonexistent.txt", "newname.txt")
-	assert.Error(t, err, "expected error when renaming nonexistent path")
+	assert.NoError(t, fs.Rename("new.txt", "existing.txt"), "expected error when renaming to existing path")
+	assert.Error(t, fs.Rename("nonexistent.txt", "newname.txt"), "expected error when renaming nonexistent path")
 }
