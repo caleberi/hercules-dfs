@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -97,22 +98,16 @@ func NewArchiver(ctx context.Context, fileSystem *filesystem.FileSystem, numWork
 }
 
 func (ac *ArchiverManager) startWorkers(numWorkers int) {
-	compressWorkers := numWorkers / 2
-	if compressWorkers <= 0 {
-		compressWorkers = 1
-	}
-	decompressWorkers := numWorkers - compressWorkers
-	if decompressWorkers <= 0 {
-		decompressWorkers = 1
-	}
+	compressWorkers := int(math.Max(1, math.Floor(float64(numWorkers)/2)))
+	decompressWorkers := int(math.Max(1, float64(numWorkers)-float64(compressWorkers)))
 
 	ac.wg.Add(compressWorkers)
-	for i := 0; i < compressWorkers; i++ {
+	for range compressWorkers {
 		go ac.compressWorker()
 	}
 
 	ac.wg.Add(decompressWorkers)
-	for i := 0; i < decompressWorkers; i++ {
+	for range decompressWorkers {
 		go ac.decompressWorker()
 	}
 }
@@ -129,7 +124,9 @@ func (ac *ArchiverManager) compressWorker() {
 			}
 			np, err := ac.compress(p)
 			select {
-			case ac.CompressPipeline.Result <- ResultInfo{Path: common.Path(np), Err: err}:
+			case ac.CompressPipeline.Result <- ResultInfo{
+				Path: common.Path(np), Err: err,
+			}:
 			case <-ac.ctx.Done():
 				return
 			}
@@ -149,7 +146,9 @@ func (ac *ArchiverManager) decompressWorker() {
 			}
 			np, err := ac.decompress(p)
 			select {
-			case ac.DecompressPipeline.Result <- ResultInfo{Path: common.Path(np), Err: err}:
+			case ac.DecompressPipeline.Result <- ResultInfo{
+				Path: common.Path(np), Err: err,
+			}:
 			case <-ac.ctx.Done():
 				return
 			}
@@ -278,10 +277,14 @@ func (ac *ArchiverManager) compress(path common.Path) (string, error) {
 	}
 
 	if err := ac.fileSystem.RemoveFile(string(path)); err != nil {
-		log.Warn().Err(err).Str("path", string(path)).Msg("Failed to remove source file after compression")
+		log.Warn().Err(err).Str("path", string(path)).
+			Msg("Failed to remove source file after compression")
 	}
 
-	log.Debug().Str("source", string(path)).Str("dest", destinationPath).Int64("size", stat.Size()).Msg("Compression completed")
+	log.Debug().Str("source", string(path)).
+		Str("dest", destinationPath).
+		Int64("size", stat.Size()).
+		Msg("Compression completed")
 	return destinationPath, nil
 }
 
@@ -300,14 +303,11 @@ func (ac *ArchiverManager) Close() {
 
 	log.Info().Msg("Shutting down ArchiverManager")
 
-	// Cancel context to signal workers to stop
 	ac.cancel()
 
-	// Close task channels to prevent new submissions
 	close(ac.CompressPipeline.Task)
 	close(ac.DecompressPipeline.Task)
 
-	// Wait for all workers to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		ac.wg.Wait()
@@ -318,7 +318,8 @@ func (ac *ArchiverManager) Close() {
 	case <-done:
 		log.Info().Msg("All archiver workers completed")
 	case <-time.After(defaultShutdownTimeout):
-		log.Warn().Dur("timeout", defaultShutdownTimeout).Msg("ArchiverManager shutdown timed out")
+		log.Warn().Dur("timeout", defaultShutdownTimeout).
+			Msg("ArchiverManager shutdown timed out")
 	}
 
 	close(ac.CompressPipeline.Result)

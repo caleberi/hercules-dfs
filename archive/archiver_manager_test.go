@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/caleberi/distributed-system/common"
 	filesystem "github.com/caleberi/distributed-system/file_system"
+	"github.com/caleberi/distributed-system/utils"
 	"github.com/jaswdr/faker/v2"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,25 +47,24 @@ func testSetup(t *testing.T) (*filesystem.FileSystem, *ArchiverManager, []byte, 
 
 	tempDir := t.TempDir()
 	fsys := filesystem.NewFileSystem(tempDir)
-
-	for _, dir := range dirpaths {
+	utils.ForEachInSlice(dirpaths, func(dir string) {
 		assert.NoErrorf(t, fsys.MkDir(dir), "failed to create directory %s", dir)
-	}
+	})
 
-	for _, path := range filepaths {
+	utils.ForEachInSlice(filepaths, func(path string) {
 		assert.NoErrorf(t, fsys.CreateFile(path), "failed to create file %s: %v", path)
-	}
+	})
 
-	for _, path := range filepaths {
+	utils.ForEachInSlice(filepaths, func(path string) {
 		f, err := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
-		assert.NoError(t, err, "failed to retrieve file %s: %v", path, err)
+		assert.NoErrorf(t, err, "failed to retrieve file %s: %v", path, err)
 		n, err := f.Write(data)
-		assert.NoError(t, err)
-		assert.GreaterOrEqual(t, n, 0)
-		assert.NoError(t, f.Close(), "failed to close file %s: %v", path, err)
-	}
+		assert.NoErrorf(t, err, "failed to write to file %s: %v", path, err)
+		assert.GreaterOrEqualf(t, n, 0, "expected to write data to file %s", path)
+		assert.NoErrorf(t, f.Close(), "failed to close file %s: %v", path, err)
+	})
 
-	archiver := NewArchiver(t.Context(), fsys, 2)
+	archiver := NewArchiver(t.Context(), fsys, runtime.NumCPU()/2)
 	return fsys, archiver, data, tempDir
 }
 
@@ -70,23 +72,28 @@ func TestMain(m *testing.M) {
 	// Download a large text file from Project Gutenberg (War and Peace by Leo Tolstoy)
 	// This is approximately 3.2MB of text data
 	url := "https://www.gutenberg.org/files/2600/2600-0.txt"
+	_, err := os.Stat(dataFile)
 
-	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
-		fmt.Println("Downloading large test file from Project Gutenberg...")
-		if err := downloadFile(url, dataFile); err != nil {
-			fmt.Printf("Warning: Failed to download test file: %v\n", err)
-			fmt.Println("Creating fallback test data...")
+	if os.IsNotExist(err) {
+		log.Info().Msg("Downloading large test file from Project Gutenberg...")
+		err := downloadFile(url, dataFile)
+		if err != nil {
+			log.Info().Msgf("Warning: Failed to download test file: %v\n", err)
+			log.Info().Msgf("Creating fallback test data...")
 			os.MkdirAll(filepath.Dir(dataFile), 0755)
 			os.WriteFile(dataFile, []byte("fallback test data for compression"), 0644)
+			defer os.Remove(dataFile)
 		} else {
-			fmt.Printf("Successfully downloaded test file to %s\n", dataFile)
+			log.Info().Msgf("Successfully downloaded test file to %s\n", dataFile)
 		}
 	}
+
 	os.Exit(m.Run())
 }
 
 func downloadFile(url, filepath string) error {
-	if err := os.MkdirAll(filepath[:strings.LastIndex(filepath, "/")], 0755); err != nil {
+	err := os.MkdirAll(filepath[:strings.LastIndex(filepath, "/")], 0755)
+	if err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
