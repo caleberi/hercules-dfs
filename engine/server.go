@@ -69,24 +69,8 @@ type Server struct {
 func NewServer(
 	serverName string, address int, logger io.Writer, tlsDir string, opts ServerOpts) (*Server, error) {
 
-	if serverName == "" {
-		return nil, fmt.Errorf("serverName cannot be empty")
-	}
-
-	if address < 1 || address > 65535 {
-		return nil, fmt.Errorf("address must be between 1-65535, got %d", address)
-	}
-
-	if logger == nil {
-		return nil, fmt.Errorf("logger cannot be nil")
-	}
-
-	if opts.EnableTls && tlsDir == "" {
-		return nil, fmt.Errorf("tlsDir required when EnableTls is true")
-	}
-
-	if opts.MaxHeaderBytes < 0 {
-		return nil, fmt.Errorf("MaxHeaderBytes cannot be negative")
+	if err := validateServerConfig(serverName, address, logger, tlsDir, opts); err != nil {
+		return nil, err
 	}
 
 	server := &Server{
@@ -107,7 +91,7 @@ func NewServer(
 		colorizedLogger := zerolog.NewConsoleWriter()
 		{
 			colorizedLogger.NoColor = false
-			colorizedLogger.FormatLevel = func(i interface{}) string {
+			colorizedLogger.FormatLevel = func(i any) string {
 				return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
 			}
 		}
@@ -115,6 +99,30 @@ func NewServer(
 	}
 
 	return server, nil
+}
+
+func validateServerConfig(serverName string, address int, logger io.Writer, tlsDir string, opts ServerOpts) error {
+	if serverName == "" {
+		return fmt.Errorf("serverName cannot be empty")
+	}
+
+	if address < 1 || address > 65535 {
+		return fmt.Errorf("address must be between 1-65535, got %d", address)
+	}
+
+	if logger == nil {
+		return fmt.Errorf("logger cannot be nil")
+	}
+
+	if opts.EnableTls && tlsDir == "" {
+		return fmt.Errorf("tlsDir required when EnableTls is true")
+	}
+
+	if opts.MaxHeaderBytes < 0 {
+		return fmt.Errorf("MaxHeaderBytes cannot be negative")
+	}
+
+	return nil
 }
 
 // Serve starts the HTTP server and listens for incoming requests.
