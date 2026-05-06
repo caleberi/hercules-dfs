@@ -40,7 +40,7 @@ func TestNewFailureDetector(t *testing.T) {
 
 func TestRecordSample_InvalidData(t *testing.T) {
 	detector, _ := setupTestDetector(t, 10, time.Second)
-	err := detector.RecordSample(NetworkData{})
+	err := detector.Track(NetworkData{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid trip timestamps")
 }
@@ -52,7 +52,7 @@ func TestRecordSample_Valid(t *testing.T) {
 		ForwardTrip:  TripInfo{SentAt: now.Add(-100 * time.Millisecond), ReceivedAt: now.Add(-50 * time.Millisecond)},
 		BackwardTrip: TripInfo{SentAt: now.Add(-50 * time.Millisecond), ReceivedAt: now},
 	}
-	err := detector.RecordSample(data)
+	err := detector.Track(data)
 	assert.NoError(t, err)
 }
 
@@ -91,24 +91,30 @@ func TestPredictFailure_ZeroVariance(t *testing.T) {
 		err := detector.Window.Add(ctx, entry)
 		assert.NoError(t, err)
 	}
-	_, err := detector.PredictFailure()
+	_, err := detector.Predict()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "zero variance")
 }
 
 func TestPredictFailure_Healthy(t *testing.T) {
 	detector, _ := setupTestDetector(t, 10, time.Minute)
-	for range 10 {
+	for i := range 10 {
 		now := time.Now()
 		data := NetworkData{
-			ForwardTrip:  TripInfo{SentAt: now.Add(-50 * time.Millisecond), ReceivedAt: now.Add(-25 * time.Millisecond)},
-			BackwardTrip: TripInfo{SentAt: now.Add(-25 * time.Millisecond), ReceivedAt: now},
+			ForwardTrip: TripInfo{
+				SentAt:     now.Add(-50 * time.Millisecond),
+				ReceivedAt: now.Add(-25 * time.Millisecond),
+			},
+			BackwardTrip: TripInfo{
+				SentAt:     now.Add(-25 * time.Millisecond),
+				ReceivedAt: now,
+			},
 		}
-		err := detector.RecordSample(data)
-		assert.NoError(t, err)
-		time.Sleep(10 * time.Millisecond)
+
+		assert.NoError(t, detector.Track(data))
+		time.Sleep(time.Duration(i) * time.Millisecond)
 	}
-	pred, err := detector.PredictFailure()
+	pred, err := detector.Predict()
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, pred.Phi, 1.0)
 	assert.Equal(t, UpperBoundThresholdAlert, pred.Message)
@@ -116,24 +122,30 @@ func TestPredictFailure_Healthy(t *testing.T) {
 
 func TestPredictFailure_WarningAndAlert(t *testing.T) {
 	detector, _ := setupTestDetector(t, 10, time.Minute)
-	for range 10 {
+	for i := range 10 {
 		now := time.Now()
 		data := NetworkData{
-			ForwardTrip:  TripInfo{SentAt: now.Add(-50 * time.Millisecond), ReceivedAt: now.Add(-25 * time.Millisecond)},
-			BackwardTrip: TripInfo{SentAt: now.Add(-25 * time.Millisecond), ReceivedAt: now},
+			ForwardTrip: TripInfo{
+				SentAt:     now.Add(-50 * time.Millisecond),
+				ReceivedAt: now.Add(-25 * time.Millisecond),
+			},
+			BackwardTrip: TripInfo{
+				SentAt:     now.Add(-25 * time.Millisecond),
+				ReceivedAt: now,
+			},
 		}
-		err := detector.RecordSample(data)
-		assert.NoError(t, err)
-		time.Sleep(10 * time.Millisecond) // Regular intervals ~100ms
+
+		assert.NoError(t, detector.Track(data))
+		time.Sleep(time.Duration(i) * time.Millisecond) // Regular intervals ~100ms
 	}
 
-	pred, err := detector.PredictFailure()
+	pred, err := detector.Predict()
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, pred.Phi, 1.0)
 	assert.Equal(t, UpperBoundThresholdAlert, pred.Message)
 
 	time.Sleep(1 * time.Second)
-	pred, err = detector.PredictFailure()
+	pred, err = detector.Predict()
 	assert.NoError(t, err)
 	assert.GreaterOrEqual(t, pred.Phi, 8.0)
 	assert.Equal(t, AccumulationThresholdAlert, pred.Message)
@@ -162,7 +174,7 @@ func TestSamplingWindow_AddGetClean(t *testing.T) {
 	assert.Len(t, entries, 3)
 
 	time.Sleep(200 * time.Millisecond)
-	err = window.clean(ctx)
+
 	assert.NoError(t, err)
 	entries, err = window.Get(ctx)
 	assert.NoError(t, err)

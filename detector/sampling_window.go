@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,6 +21,31 @@ type SamplingWindow[T Scorer] struct {
 	ttl  time.Duration
 	rdb  *redis.Client
 }
+
+// addScript atomically:
+//  1. Purges expired members (score < now - ttl)
+//  2. Adds the new entry with score = now (data embedded as "id|json")
+//  3. Trims oldest entries if the window exceeds its size cap
+//
+// Single round-trip. No separate expiry set or data keys needed.
+var addScript = redis.NewScript(`
+	local key   = KEYS[1]
+	local now   = tonumber(ARGV[1])
+	local ttlMs = tonumber(ARGV[2])
+	local size  = tonumber(ARGV[3])
+	local score = tonumber(ARGV[4])
+	local data  = ARGV[5]
+
+	redis.call('ZREMRANGEBYSCORE', key, '-inf', now - ttlMs)
+	redis.call('ZADD', key, score, data)
+
+	local card = redis.call('ZCARD', key)
+	if card > size then
+		redis.call('ZREMRANGEBYRANK', key, 0, card - size - 1)
+	end
+
+	return redis.status_reply('OK')
+`)
 
 // NewSamplingWindow creates a new Redis-backed sampling window.
 //
@@ -58,163 +84,48 @@ func NewSamplingWindow[T Scorer](
 	}, nil
 }
 
-// clean removes expired entries and enforces window size limits.
-// It performs cleanup in two phases:
-//  1. Remove entries past their TTL
-//  2. Remove oldest entries if window exceeds size limit
-func (sw *SamplingWindow[T]) clean(ctx context.Context) error {
-	windowKey := sw.key + ":main_set"
-	expiredWindowKey := sw.key + ":expired_set"
-	dataPrefix := sw.key + ":item:"
-
-	card, err := sw.rdb.ZCard(ctx, windowKey).Result()
-	if err != nil {
-		return fmt.Errorf("failed to get window size: %w", err)
-	}
-
-	query := &redis.ZRangeBy{Min: "-inf", Max: fmt.Sprintf("%d", time.Now().UnixMilli())}
-	expired, err := sw.rdb.ZRangeByScore(ctx, expiredWindowKey, query).Result()
-	if err != nil {
-		return fmt.Errorf("failed to query expired entries: %w", err)
-	}
-
-	if len(expired) > 0 {
-		p := sw.rdb.Pipeline()
-		for _, id := range expired {
-			p.ZRem(ctx, expiredWindowKey, id)
-			p.ZRem(ctx, windowKey, id)
-			p.Del(ctx, dataPrefix+id)
-		}
-		if _, err := p.Exec(ctx); err != nil {
-			return fmt.Errorf("failed to remove expired entries: %w", err)
-		}
-	}
-
-	card, err = sw.rdb.ZCard(ctx, windowKey).Result()
-	if err != nil {
-		return fmt.Errorf("failed to get updated window size: %w", err)
-	}
-
-	if card > int64(sw.size) {
-		numToRemove := card - int64(sw.size)
-		oldest, err := sw.rdb.ZRange(ctx, windowKey, 0, numToRemove-1).Result()
-		if err != nil {
-			return fmt.Errorf("failed to query oldest entries: %w", err)
-		}
-
-		if len(oldest) > 0 {
-			p := sw.rdb.Pipeline()
-			for _, id := range oldest {
-				p.ZRem(ctx, windowKey, id)
-				p.ZRem(ctx, expiredWindowKey, id)
-				p.Del(ctx, dataPrefix+id)
-			}
-			if _, err := p.Exec(ctx); err != nil {
-				return fmt.Errorf("failed to enforce size limit: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// Add inserts a new entry into the sampling window.
-// Automatically cleans expired entries and enforces size limits.
 func (sw *SamplingWindow[T]) Add(ctx context.Context, entry T) error {
-	if err := sw.clean(ctx); err != nil {
-		return err
-	}
-
 	jsn, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
 
-	mainKey := sw.key + ":main_set"
-	expKey := sw.key + ":expired_set"
-	dataPrefix := sw.key + ":item:"
-	member := entry.ID()
-	score := float64(entry.Score())
-	expScore := float64(time.Now().UnixMilli() + int64(sw.ttl.Milliseconds()))
-
-	p := sw.rdb.Pipeline()
-	p.Set(ctx, dataPrefix+member, jsn, 0)
-	p.ZAdd(ctx, mainKey, redis.Z{Score: score, Member: member})
-	p.ZAdd(ctx, expKey, redis.Z{Score: expScore, Member: member})
-	if _, err := p.Exec(ctx); err != nil {
-		return fmt.Errorf("failed to add entry: %w", err)
-	}
-
-	card, err := sw.rdb.ZCard(ctx, mainKey).Result()
-	if err != nil {
-		return fmt.Errorf("failed to get window size after add: %w", err)
-	}
-
-	if card > int64(sw.size) {
-		numToRemove := card - int64(sw.size)
-		oldest, err := sw.rdb.ZRange(ctx, mainKey, 0, numToRemove-1).Result()
-		if err != nil {
-			return fmt.Errorf("failed to query oldest for size enforcement: %w", err)
-		}
-
-		if len(oldest) > 0 {
-			p = sw.rdb.Pipeline()
-			for _, id := range oldest {
-				p.ZRem(ctx, mainKey, id)
-				p.ZRem(ctx, expKey, id)
-				p.Del(ctx, dataPrefix+id)
-			}
-			if _, err := p.Exec(ctx); err != nil {
-				return fmt.Errorf("failed to remove excess entries: %w", err)
-			}
-		}
-	}
-
-	return nil
+	now := time.Now().UnixMilli()
+	member := entry.ID() + "|" + string(jsn)
+	return addScript.Run(ctx, sw.rdb, []string{sw.key},
+		now,                    // ARGV[1] — current time (ms), used for TTL purge
+		sw.ttl.Milliseconds(),  // ARGV[2] — window TTL in ms
+		sw.size,                // ARGV[3] — max window size
+		float64(entry.Score()), // ARGV[4] — sort score for the new member
+		member,                 // ARGV[5] — "id|json" payload
+	).Err()
 }
 
 // Get retrieves all current entries in the sampling window.
 // Returns entries in reverse chronological order (newest first).
+// Uses a single ZRangeByScore call filtered to the live TTL range.
 func (sw *SamplingWindow[T]) Get(ctx context.Context) ([]T, error) {
-	if err := sw.clean(ctx); err != nil {
-		return nil, err
-	}
+	minScore := time.Now().UnixMilli() - sw.ttl.Milliseconds()
 
-	mainKey := sw.key + ":main_set"
-	dataPrefix := sw.key + ":item:"
-
-	members, err := sw.rdb.ZRevRange(ctx, mainKey, 0, -1).Result()
+	members, err := sw.rdb.ZRangeByScore(ctx, sw.key, &redis.ZRangeBy{
+		Min: fmt.Sprintf("%d", minScore),
+		Max: "+inf",
+	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get window members: %w", err)
-	}
-
-	if len(members) == 0 {
-		return []T{}, nil
-	}
-
-	keys := make([]string, len(members))
-	for i, member := range members {
-		keys[i] = dataPrefix + member
-	}
-
-	values, err := sw.rdb.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get entry data: %w", err)
+		return nil, fmt.Errorf("failed to query window: %w", err)
 	}
 
 	result := make([]T, 0, len(members))
-	for _, val := range values {
-		if val == nil {
-			continue
-		}
+	for i := len(members) - 1; i >= 0; i-- {
+		raw := members[i]
 
-		jsStr, ok := val.(string)
+		_, after, ok := strings.Cut(raw, "|")
 		if !ok {
-			continue
+			return nil, fmt.Errorf("malformed member (missing separator): %q", raw)
 		}
 
 		var entry T
-		if err := json.Unmarshal([]byte(jsStr), &entry); err != nil {
+		if err := json.Unmarshal([]byte(after), &entry); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal entry: %w", err)
 		}
 		result = append(result, entry)

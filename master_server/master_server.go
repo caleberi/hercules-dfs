@@ -203,7 +203,7 @@ func NewMasterServer(ctx context.Context, config MasterServerConfig) *MasterServ
 				branchInfo.Err = ma.persistMetaData()
 			case <-failurePredictionCheck.C:
 				branchInfo.Event = string(common.FailurePrediction)
-				prediction, err := ma.detector.PredictFailure()
+				prediction, err := ma.detector.Predict()
 				if err != nil {
 					branchInfo.Err = err
 				} else if !reflect.DeepEqual(prediction, detector.Prediction{}) {
@@ -260,7 +260,7 @@ func (ma *MasterServer) serverHeartBeat() error {
 
 		reply.NetworkData.BackwardTrip.ReceivedAt = time.Now()
 		if ma.detector != nil {
-			if err := ma.detector.RecordSample(reply.NetworkData); err != nil {
+			if err := ma.detector.Track(reply.NetworkData); err != nil {
 				log.Err(err).Stack().Msg("err storing network data for prediction")
 			}
 		}

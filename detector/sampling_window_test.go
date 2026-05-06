@@ -33,7 +33,7 @@ func TestSamplingWindowClean(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	card, err := sw.rdb.ZCard(ctx, sw.key+":main_set").Result()
+	card, err := sw.rdb.ZCard(ctx, sw.key).Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(5), card)
 
@@ -45,7 +45,7 @@ func TestSamplingWindowClean(t *testing.T) {
 	err = sw.Add(ctx, expiredEntry)
 	assert.NoError(t, err)
 
-	card, err = sw.rdb.ZCard(ctx, sw.key+":main_set").Result()
+	card, err = sw.rdb.ZCard(ctx, sw.key).Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(6), card)
 
@@ -59,7 +59,7 @@ func TestSamplingWindowClean(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	card, err = sw.rdb.ZCard(ctx, sw.key+":main_set").Result()
+	card, err = sw.rdb.ZCard(ctx, sw.key).Result()
 	assert.NoError(t, err)
 	assert.LessOrEqual(t, card, int64(10), "Window size should be enforced")
 }

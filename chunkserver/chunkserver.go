@@ -480,7 +480,7 @@ func (cs *ChunkServer) heartBeat() error {
 	}
 
 	reply.NetworkData.BackwardTrip.ReceivedAt = time.Now()
-	if err := cs.failureDetector.RecordSample(reply.NetworkData); err != nil {
+	if err := cs.failureDetector.Track(reply.NetworkData); err != nil {
 		log.Err(err).Stack().Msg("err storing network data for prediction")
 		return err
 	}
@@ -498,7 +498,7 @@ func (cs *ChunkServer) heartBeat() error {
 		})
 		cs.garbageMu.Unlock()
 	}
-	prediction, err := cs.failureDetector.PredictFailure()
+	prediction, err := cs.failureDetector.Predict()
 	if err != nil {
 		if !errors.Is(err, detector.ErrNotEnoughHistoricalSamples) {
 			log.Err(err).Stack().Send()
