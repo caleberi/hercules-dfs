@@ -46,7 +46,7 @@ type NamespaceManager struct {
 	serializationCount   int           // Counter for serialization operations
 	deserializationCount int           // Counter for deserialization operations
 	cleanUpInterval      time.Duration // Interval for periodic cleanup of deleted nodes
-	mu                   sync.Mutex
+	mu                   sync.RWMutex
 }
 
 // NewNameSpaceManager creates a new NamespaceManager with the specified cleanup interval.
@@ -71,15 +71,19 @@ func NewNameSpaceManager(ctx context.Context, cleanUpInterval time.Duration) *Na
 			case <-nm.ctx.Done():
 				return
 			case path := <-nm.cleanupChan:
+				// Serialize all namespace mutations under nm.mu to avoid races with
+				// Get/List/Serialize and other operations (tests may run with -race).
+				nm.mu.Lock()
 				dirpath, filename := nm.RetrievePartitionFromPath(common.Path(path))
+				deletedKey := fmt.Sprintf("%s%s", common.DeletedNamespaceFilePrefix, filename)
 				parents, cwd, err := nm.lockParents(common.Path(dirpath), true)
 				if err != nil {
+					nm.mu.Unlock()
 					continue
 				}
-				delete(cwd.childrenNodes, filename)
+				delete(cwd.childrenNodes, deletedKey)
 				nm.unlockParents(parents, true)
 
-				nm.mu.Lock()
 				delete(nm.deleteCache, path)
 				nm.mu.Unlock()
 			}
@@ -87,19 +91,21 @@ func NewNameSpaceManager(ctx context.Context, cleanUpInterval time.Duration) *Na
 	}(nm)
 
 	go func(nm *NamespaceManager) {
+		ticker := time.NewTicker(cleanUpInterval)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-nm.ctx.Done():
 				return
-			case <-time.After(cleanUpInterval):
-				nm.mu.Lock()
+			case <-ticker.C:
+				nm.mu.RLock()
 				for path := range nm.deleteCache {
 					select {
 					case nm.cleanupChan <- path:
 					default:
 					}
 				}
-				nm.mu.Unlock()
+				nm.mu.RUnlock()
 			}
 		}
 	}(nm)
@@ -129,8 +135,6 @@ func (nm *NamespaceManager) Deserialize(nodes []SerializedNsTreeNode) *NsTree {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
 
-	nm.root.RLock()
-	defer nm.root.RUnlock()
 	nm.root = nm.SliceToNsTree(nodes, len(nodes)-1)
 	return nm.root
 }
@@ -139,9 +143,6 @@ func (nm *NamespaceManager) Deserialize(nodes []SerializedNsTreeNode) *NsTree {
 func (nm *NamespaceManager) Serialize() []SerializedNsTreeNode {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
-
-	nm.root.RLock()
-	defer nm.root.RUnlock()
 
 	nm.serializationCount = 0
 	ret := []SerializedNsTreeNode{}
@@ -282,7 +283,6 @@ func (nm *NamespaceManager) Delete(p common.Path) error {
 
 	node := cwd.childrenNodes[filename]
 	deletedNodeKey := fmt.Sprintf("%s%s", common.DeletedNamespaceFilePrefix, filename)
-	node.Path = common.Path(deletedNodeKey)
 	cwd.childrenNodes[deletedNodeKey] = node
 	delete(cwd.childrenNodes, filename)
 
@@ -361,8 +361,8 @@ func (nm *NamespaceManager) MkDirAll(p common.Path) error {
 
 // Get retrieves the NsTree node at the specified path, returning an error if it does not exist.
 func (nm *NamespaceManager) Get(p common.Path) (*NsTree, error) {
-	nm.mu.Lock()
-	defer nm.mu.Unlock()
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
 
 	dirpath, filenameOrDirname := nm.RetrievePartitionFromPath(p)
 	parents, cwd, err := nm.lockParents(common.Path(dirpath), false)
@@ -378,21 +378,18 @@ func (nm *NamespaceManager) Get(p common.Path) (*NsTree, error) {
 
 // Rename moves a file or directory from the source path to the target path.
 func (nm *NamespaceManager) Rename(source, target common.Path) error {
-	nm.mu.Lock()
 	if source == target {
 		return nil
 	}
-	err := errors.Join(
-		utils.ValidateFilename(string(source), source),
-		utils.ValidateFilename(string(target), target))
-	if err != nil {
-		nm.mu.Unlock()
-		return fmt.Errorf("invalid path: %v", err)
-	}
-
 	srcDirpath, srcName := nm.RetrievePartitionFromPath(source)
 	tgtDirpath, tgtName := nm.RetrievePartitionFromPath(target)
-	nm.mu.Unlock()
+	err := errors.Join(
+		utils.ValidateFilename(srcName, source),
+		utils.ValidateFilename(tgtName, target),
+	)
+	if err != nil {
+		return fmt.Errorf("invalid path: %v", err)
+	}
 
 	if _, err := nm.Get(common.Path(source)); err != nil {
 		return fmt.Errorf("failed to locate source directory: %v", err)
@@ -480,8 +477,8 @@ func (nm *NamespaceManager) Rename(source, target common.Path) error {
 
 // List returns a list of PathInfo for all nodes under the specified path.
 func (nm *NamespaceManager) List(p common.Path) ([]common.PathInfo, error) {
-	nm.mu.Lock()
-	defer nm.mu.Unlock()
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
 
 	var dir *NsTree
 	var parents []*NsTree
@@ -588,7 +585,6 @@ func (nm *NamespaceManager) RemoveDir(p common.Path) error {
 	}
 
 	deletedNodeKey := fmt.Sprintf("%s%s", common.DeletedNamespaceFilePrefix, dirname)
-	node.Path = common.Path(deletedNodeKey)
 	cwd.childrenNodes[deletedNodeKey] = node
 	delete(cwd.childrenNodes, dirname)
 

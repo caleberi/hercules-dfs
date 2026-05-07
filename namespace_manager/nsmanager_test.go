@@ -3,6 +3,8 @@ package namespacemanager
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,6 +184,20 @@ func TestNamespaceManager(t *testing.T) {
 		}
 	})
 
+	t.Run("CreateFileFailures", func(t *testing.T) {
+		nm := newManager()
+
+		require.NoError(t, nm.MkDirAll(common.Path("/home/usr")))
+		err := nm.Create(common.Path("/home/usr/.."))
+		assert.Error(t, err)
+
+		err = nm.Create(common.Path("/missing_parent/file.txt"))
+		assert.Error(t, err)
+
+		err = nm.Create(common.Path("/"))
+		assert.Error(t, err)
+	})
+
 	t.Run("DeleteFile", func(t *testing.T) {
 		nm := newManager()
 
@@ -222,6 +238,27 @@ func TestNamespaceManager(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("DeleteTwiceAndListFiltering", func(t *testing.T) {
+		nm := NewNameSpaceManager(ctx, 50*time.Millisecond)
+
+		require.NoError(t, nm.MkDirAll(common.Path("/home/usr")))
+		require.NoError(t, nm.Create(common.Path("/home/usr/crab.txt")))
+		require.NoError(t, nm.Delete(common.Path("/home/usr/crab.txt")))
+
+		err := nm.Delete(common.Path("/home/usr/crab.txt"))
+		assert.Error(t, err)
+
+		entries, err := nm.List(common.Path("/home/usr"))
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.False(t, strings.HasPrefix(e.Name, common.DeletedNamespaceFilePrefix))
+		}
+
+		time.Sleep(150 * time.Millisecond)
+		_, err = nm.Get(common.Path("/home/usr/crab.txt"))
+		assert.Error(t, err)
 	})
 
 	t.Run("Rename", func(t *testing.T) {
@@ -280,6 +317,86 @@ func TestNamespaceManager(t *testing.T) {
 		}
 	})
 
+	t.Run("RenameFailures", func(t *testing.T) {
+		nm := newManager()
+		require.NoError(t, nm.MkDirAll(common.Path("/home/usr")))
+		require.NoError(t, nm.Create(common.Path("/home/usr/a.txt")))
+		require.NoError(t, nm.Create(common.Path("/home/usr/b.txt")))
+
+		err := nm.Rename(common.Path("/home/usr/a.txt"), common.Path("/home/usr/b.txt"))
+		assert.Error(t, err)
+
+		err = nm.Rename(common.Path("/home/usr/a.txt"), common.Path("/home/usr/.."))
+		assert.Error(t, err)
+	})
+
+	t.Run("UpdateFileMetadataFailures", func(t *testing.T) {
+		nm := newManager()
+		require.NoError(t, nm.MkDirAll(common.Path("/home/usr")))
+
+		err := nm.UpdateFileMetadata(common.Path("/home/usr/missing.txt"), 10, 1)
+		assert.Error(t, err)
+
+		require.NoError(t, nm.MkDir(common.Path("/home/usr/dir")))
+		err = nm.UpdateFileMetadata(common.Path("/home/usr/dir"), 10, 1)
+		assert.Error(t, err)
+
+		require.NoError(t, nm.Create(common.Path("/home/usr/file.txt")))
+		require.NoError(t, nm.UpdateFileMetadata(common.Path("/home/usr/file.txt"), 123, 2))
+		node, err := nm.Get(common.Path("/home/usr/file.txt"))
+		require.NoError(t, err)
+		node.RLock()
+		assert.Equal(t, int64(123), node.Length)
+		assert.Equal(t, int64(2), node.Chunks)
+		node.RUnlock()
+	})
+
+	t.Run("RemoveDirFailures", func(t *testing.T) {
+		nm := newManager()
+
+		err := nm.RemoveDir(common.Path("/"))
+		assert.Error(t, err)
+
+		err = nm.RemoveDir(common.Path("/doesnotexist"))
+		assert.Error(t, err)
+
+		require.NoError(t, nm.MkDirAll(common.Path("/home/usr")))
+		require.NoError(t, nm.Create(common.Path("/home/usr/file.txt")))
+		err = nm.RemoveDir(common.Path("/home/usr/file.txt"))
+		assert.Error(t, err)
+	})
+
+	t.Run("ConcurrentCreatesAndDeletesWithCleanup", func(t *testing.T) {
+		nm := NewNameSpaceManager(ctx, 25*time.Millisecond)
+		require.NoError(t, nm.MkDirAll(common.Path("/test")))
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				_ = nm.Create(common.Path(fmt.Sprintf("/test/file%d.txt", i)))
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i += 2 {
+				_ = nm.Delete(common.Path(fmt.Sprintf("/test/file%d.txt", i)))
+			}
+		}()
+
+		wg.Wait()
+		time.Sleep(75 * time.Millisecond)
+
+		entries, err := nm.List(common.Path("/test"))
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.False(t, strings.HasPrefix(e.Name, common.DeletedNamespaceFilePrefix))
+		}
+	})
+
 	t.Run("SerializeDeserialize", func(t *testing.T) {
 		nm := newManager()
 
@@ -333,7 +450,6 @@ func TestNamespaceManager(t *testing.T) {
 				}
 				assert.NoError(t, err, "Unexpected error for listing %s", tt.path)
 
-				// Extract paths from PathInfo
 				paths := make([]string, len(info))
 				for i, pi := range info {
 					paths[i] = pi.Path
