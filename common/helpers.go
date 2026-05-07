@@ -1,4 +1,4 @@
-package utils
+package common
 
 import (
 	"crypto/sha256"
@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-
-	"github.com/caleberi/distributed-system/common"
 )
 
 func ExtractFromMap[K, V comparable](data map[K]V, fn func(value V) bool) map[K]V {
@@ -147,7 +145,7 @@ func ComputeChecksum(content string) string {
 
 // ValidateFilename checks if the given filename is valid for use in the namespace.
 // It returns an error if the filename is empty or a reserved name like "." or "..".
-func ValidateFilename(filename string, path common.Path) error {
+func ValidateFilename(filename string, path Path) error {
 	if filename == "" || filename == "." || filename == ".." {
 		return fmt.Errorf("invalid filename %q: reserved name", filename)
 	}

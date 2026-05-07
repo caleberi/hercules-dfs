@@ -28,7 +28,6 @@ import (
 	filesystem "github.com/caleberi/distributed-system/file_system"
 	"github.com/caleberi/distributed-system/rpc_struct"
 	"github.com/caleberi/distributed-system/shared"
-	"github.com/caleberi/distributed-system/utils"
 	"github.com/olekukonko/tablewriter"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
@@ -75,9 +74,9 @@ type ChunkServer struct {
 
 	shutdownChan chan os.Signal // channel for handling shutdown signals
 
-	leases utils.Deque[*common.Lease] // deque of active leases for chunk access
+	leases common.Deque[*common.Lease] // deque of active leases for chunk access
 
-	garbage utils.Deque[common.ChunkHandle] // deque of chunks marked for garbage collection
+	garbage common.Deque[common.ChunkHandle] // deque of chunks marked for garbage collection
 
 	ServerAddr  common.ServerAddr  // address of this server
 	MasterAddr  common.ServerAddr  // address of the master server
@@ -172,9 +171,9 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 		MasterAddr:      masterAddr,
 		MachineInfo:     machineInfo,
 		shutdownChan:    make(chan os.Signal),
-		leases:          utils.Deque[*common.Lease]{},
+		leases:          common.Deque[*common.Lease]{},
 		chunks:          make(map[common.ChunkHandle]*chunkInfo),
-		garbage:         utils.Deque[common.ChunkHandle]{},
+		garbage:         common.Deque[common.ChunkHandle]{},
 		archiver:        archivemanager.NewArchiver(context.Background(), fs, 2),
 		failureDetector: failureDetector,
 		isDead:          false,
@@ -290,7 +289,7 @@ func (cs *ChunkServer) archiveChunks() error {
 		return time.Since(value.accessTime).Hours()/24 > common.ArchivalDaySpan
 	}
 	cs.mu.Lock()
-	chunksToArchive := utils.ExtractFromMap(cs.chunks, checkAccessTime)
+	chunksToArchive := common.ExtractFromMap(cs.chunks, checkAccessTime)
 	cs.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -435,7 +434,7 @@ func (cs *ChunkServer) loadMetadata() error {
 	}
 
 	log.Info().Msg(fmt.Sprintf("Server %s found metas with length %d", cs.ServerAddr, len(metas)))
-	utils.ForEachInSlice(metas, func(m PersistedMetaData) {
+	common.ForEachInSlice(metas, func(m PersistedMetaData) {
 		if m.Length < 0 {
 			log.Warn().Msg(
 				fmt.Sprintf("Server %s skipping invalid metadata for chunk-%d: negative length",
@@ -492,14 +491,14 @@ func (cs *ChunkServer) heartBeat() error {
 	}
 
 	if reply.LeaseExtensions != nil {
-		utils.ForEachInSlice(reply.LeaseExtensions, func(lease *common.Lease) {
+		common.ForEachInSlice(reply.LeaseExtensions, func(lease *common.Lease) {
 			cs.leases.PushBack(lease)
 		})
 	}
 
 	if reply.Garbage != nil {
 		cs.garbageMu.Lock()
-		utils.ForEachInSlice(reply.Garbage, func(handle common.ChunkHandle) {
+		common.ForEachInSlice(reply.Garbage, func(handle common.ChunkHandle) {
 			cs.garbage.PushBack(handle)
 		})
 		cs.garbageMu.Unlock()
@@ -729,10 +728,10 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArgs, re
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	alloc := utils.BToMb(m.Alloc)
-	totalAlloc := utils.BToMb(m.TotalAlloc)
-	tSys := utils.BToMb(m.Sys)
-	numGC := utils.BToMb(uint64(m.NumGC))
+	alloc := common.BToMb(m.Alloc)
+	totalAlloc := common.BToMb(m.TotalAlloc)
+	tSys := common.BToMb(m.Sys)
+	numGC := common.BToMb(uint64(m.NumGC))
 
 	mem := common.Memory{
 		TotalAlloc: totalAlloc,
@@ -996,7 +995,7 @@ func (cs *ChunkServer) RPCWriteChunkHandler(args rpc_struct.WriteChunkArgs, repl
 
 	// calculate the next offset from the prevous cursor position
 	// assumption is that the data in the buffer is greated than 64 << 20
-	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
+	dataSize := common.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
 		reply.ErrorCode = common.WriteExceedChunkSize
 		return nil
@@ -1062,7 +1061,7 @@ func (cs *ChunkServer) RPCApplyMutationHandler(args rpc_struct.ApplyMutationArgs
 
 	// calculate the next offset from the previous cursor position
 	// assumption is that the data in the buffer is greater than 64 << 20
-	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
+	dataSize := common.BToMb(uint64(args.Offset) + uint64(len(data)))
 
 	if dataSize > common.ChunkMaxSizeInMb {
 		return fmt.Errorf("provided data size for append action [%v] is larger than the max allowed data size of %v mb", args.DownloadBufferId, common.ChunkMaxSizeInMb)
@@ -1141,7 +1140,7 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	var mutationType common.MutationType
 	offset := chInfo.length
 	newLength := chInfo.length + common.Offset(len(data))
-	dataSize := utils.BToMb(uint64(newLength))
+	dataSize := common.BToMb(uint64(newLength))
 
 	if dataSize > common.ChunkMaxSizeInMb {
 		mutationType = common.MutationPad
@@ -1175,7 +1174,7 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	errs := make(chan error)
 	// forward a written call to all available secondary servers
 	go func() {
-		utils.ForEachInSlice(args.Replicas, func(addr common.ServerAddr) {
+		common.ForEachInSlice(args.Replicas, func(addr common.ServerAddr) {
 			var applyMutationReply rpc_struct.ApplyMutationReply
 			err := shared.UnicastToRPCServer(
 				string(addr), rpc_struct.CRPCApplyMutationHandler,
@@ -1319,7 +1318,7 @@ func performWrite(cs *ChunkServer, deadline time.Time, args rpc_struct.WriteChun
 		}
 	}
 
-	dataSize := utils.BToMb(uint64(args.Offset) + uint64(len(data)))
+	dataSize := common.BToMb(uint64(args.Offset) + uint64(len(data)))
 	if dataSize > common.ChunkMaxSizeInMb {
 		return 0, fmt.Errorf("data size for chunk %v exceeds max size of %v MB", handle, common.ChunkMaxSizeInMb)
 	}
@@ -1651,7 +1650,7 @@ func extractAverageRTT(output string) (float64, error) {
 		return 0.0, fmt.Errorf("no avg RTT found in: %s", output)
 	}
 
-	avg := utils.Sum(utils.TransformSlice(
+	avg := common.Sum(common.TransformSlice(
 		match, func(x string) float64 {
 			v, err := strconv.ParseFloat(match[1], 64)
 			if err != nil {

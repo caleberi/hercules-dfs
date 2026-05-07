@@ -11,7 +11,6 @@ import (
 	"github.com/caleberi/distributed-system/common"
 	"github.com/caleberi/distributed-system/rpc_struct"
 	"github.com/caleberi/distributed-system/shared"
-	"github.com/caleberi/distributed-system/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -150,7 +149,7 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 	defer csm.chunkMutex.Unlock()
 	errs := []string{}
 
-	utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
+	common.ForEachInSlice(handles, func(handle common.ChunkHandle) {
 		chk, exist := csm.chunks[handle]
 		if !exist {
 			errs = append(errs, fmt.Sprintf("chunk handle (%v) does not exist", handle))
@@ -158,7 +157,7 @@ func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server
 		}
 
 		chk.Lock()
-		chk.locations = utils.FilterSlice(
+		chk.locations = common.FilterSlice(
 			chk.locations, func(v common.ServerAddr) bool { return v != server })
 		chk.expire = time.Now()
 		num := len(chk.locations) //  calculate the number of chunk replica if it is less that the
@@ -211,7 +210,7 @@ func (csm *ChunkServerManager) removeServer(addr common.ServerAddr) ([]common.Ch
 	}
 
 	var handles []common.ChunkHandle
-	utils.IterateOverMap(chk.chunks, func(handle common.ChunkHandle, _ bool) {
+	common.IterateOverMap(chk.chunks, func(handle common.ChunkHandle, _ bool) {
 		handles = append(handles, handle)
 	})
 
@@ -359,7 +358,7 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 		wg.Wait()
 
 		chk.locations = make([]common.ServerAddr, 0)
-		utils.ForEachInSlice(newLocationList, func(v string) { chk.locations = append(chk.locations, common.ServerAddr(v)) })
+		common.ForEachInSlice(newLocationList, func(v string) { chk.locations = append(chk.locations, common.ServerAddr(v)) })
 
 		if len(chk.locations) < common.MinimumReplicationFactor {
 			csm.Lock()
@@ -377,7 +376,7 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 	}
 
 	lease.Primary = chk.primary
-	lease.Secondaries = utils.FilterSlice(chk.locations, func(v common.ServerAddr) bool { return v != chk.primary })
+	lease.Secondaries = common.FilterSlice(chk.locations, func(v common.ServerAddr) bool { return v != chk.primary })
 	lease.Handle = handle
 
 	if lease.Primary == "" && len(lease.Secondaries) > 0 {
@@ -440,8 +439,8 @@ func (csm *ChunkServerManager) chooseServers(num int) ([]common.ServerAddr, erro
 		return 0
 	})
 
-	all := utils.TransformSlice(intermediateArr, func(d addrToRRTL) common.ServerAddr { return d.addr })
-	choose, err := utils.Sample(len(all), num)
+	all := common.TransformSlice(intermediateArr, func(d addrToRRTL) common.ServerAddr { return d.addr })
+	choose, err := common.Sample(len(all), num)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +483,7 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 
 	args := rpc_struct.CreateChunkArgs{Handle: currentHandle}
 
-	utils.ForEachInSlice(addrs, func(addr common.ServerAddr) {
+	common.ForEachInSlice(addrs, func(addr common.ServerAddr) {
 		var reply rpc_struct.CreateChunkReply
 		err := shared.UnicastToRPCServer(
 			string(addr), rpc_struct.CRPCCreateChunkHandler, args, &reply, shared.DefaultRetryConfig)
@@ -500,7 +499,7 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 		}
 	})
 
-	servers := utils.TransformSlice(success, func(v string) common.ServerAddr { return common.ServerAddr(v) })
+	servers := common.TransformSlice(success, func(v string) common.ServerAddr { return common.ServerAddr(v) })
 	err := errors.Join(errs...)
 
 	// if err occurred during the creation of chunk, then
@@ -698,7 +697,7 @@ func (csm *ChunkServerManager) GetLiveServers() []common.ServerAddr {
 	defer csm.serverMutex.RUnlock()
 
 	allServers := make([]common.ServerAddr, 0, len(csm.servers))
-	utils.IterateOverMap(csm.servers, func(serverAddr common.ServerAddr, chunk *chunkServerInfo) {
+	common.IterateOverMap(csm.servers, func(serverAddr common.ServerAddr, chunk *chunkServerInfo) {
 		if !chunk.lastHeartBeat.IsZero() && time.Since(chunk.lastHeartBeat) < common.ServerHealthCheckTimeout {
 			allServers = append(allServers, serverAddr)
 		}

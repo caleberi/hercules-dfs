@@ -15,7 +15,6 @@ import (
 
 	"github.com/caleberi/distributed-system/common"
 	filesystem "github.com/caleberi/distributed-system/file_system"
-	"github.com/caleberi/distributed-system/utils"
 	"github.com/jaswdr/faker/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -47,15 +46,15 @@ func testSetup(t *testing.T) (*filesystem.FileSystem, *ArchiverManager, []byte, 
 
 	tempDir := t.TempDir()
 	fsys := filesystem.NewFileSystem(tempDir)
-	utils.ForEachInSlice(dirpaths, func(dir string) {
+	common.ForEachInSlice(dirpaths, func(dir string) {
 		assert.NoErrorf(t, fsys.MkDir(dir), "failed to create directory %s", dir)
 	})
 
-	utils.ForEachInSlice(filepaths, func(path string) {
+	common.ForEachInSlice(filepaths, func(path string) {
 		assert.NoErrorf(t, fsys.CreateFile(path), "failed to create file %s: %v", path)
 	})
 
-	utils.ForEachInSlice(filepaths, func(path string) {
+	common.ForEachInSlice(filepaths, func(path string) {
 		f, err := fsys.GetFile(path, os.O_RDWR|os.O_TRUNC, 0644)
 		assert.NoErrorf(t, err, "failed to retrieve file %s: %v", path, err)
 		n, err := f.Write(data)

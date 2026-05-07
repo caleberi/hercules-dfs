@@ -15,7 +15,6 @@ import (
 	downloadbuffer "github.com/caleberi/distributed-system/download_buffer"
 	"github.com/caleberi/distributed-system/rpc_struct"
 	"github.com/caleberi/distributed-system/shared"
-	"github.com/caleberi/distributed-system/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -73,7 +72,7 @@ func (hercules *HerculesClient) cleanLease(d time.Duration) {
 		}
 		<-time.After(d)
 		hercules.cacheMux.Lock()
-		utils.IterateOverMap(hercules.cache, cleanup)
+		common.IterateOverMap(hercules.cache, cleanup)
 		hercules.cacheMux.Unlock()
 	}
 }
@@ -549,7 +548,7 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 		offset = nextOffset
 
 		servers := append(writeLease.Secondaries, writeLease.Primary)
-		servers = utils.FilterSlice(servers,
+		servers = common.FilterSlice(servers,
 			func(v common.ServerAddr) bool { return string(v) != "" })
 
 		if len(servers) == 0 {
@@ -564,10 +563,10 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 		dataID := downloadbuffer.NewDownloadBufferId(handle)
 
 		var errs []string
-		utils.ForEachInSlice(servers, func(addr common.ServerAddr) {
+		common.ForEachInSlice(servers, func(addr common.ServerAddr) {
 			var d rpc_struct.ForwardDataReply
 			if addr != "" {
-				replicas := utils.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
+				replicas := common.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
 				err = shared.UnicastToRPCServer(string(addr),
 					rpc_struct.CRPCForwardDataHandler,
 					rpc_struct.ForwardDataArgs{

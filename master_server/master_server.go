@@ -22,7 +22,6 @@ import (
 	namespacemanager "github.com/caleberi/distributed-system/namespace_manager"
 	"github.com/caleberi/distributed-system/rpc_struct"
 	"github.com/caleberi/distributed-system/shared"
-	"github.com/caleberi/distributed-system/utils"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
@@ -234,7 +233,7 @@ func (ma *MasterServer) serverHeartBeat() error {
 	}
 
 	// perform a broadcast to all servers to get there health status for failure detection
-	allServers := utils.TransformSlice(
+	allServers := common.TransformSlice(
 		ma.chunkServerManager.GetLiveServers(),
 		func(v common.ServerAddr) string { return string(v) },
 	)
@@ -272,7 +271,7 @@ func (ma *MasterServer) serverHeartBeat() error {
 
 	//  deadserver have nothing to do with the replication logic
 	handles := ma.chunkServerManager.replicationMigration()
-	utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
+	common.ForEachInSlice(handles, func(handle common.ChunkHandle) {
 		if ck, ok := ma.chunkServerManager.getChunk(handle); ok {
 			log.Info().Msgf("Replication in progress >>> for handle [%v] chunk [%v]", handle, ck)
 			err := ma.performReplication(handle)
@@ -483,7 +482,7 @@ func (ma *MasterServer) RPCHeartBeatHandler(args rpc_struct.HeartBeatArgs, reply
 		return nil
 	}
 
-	utils.ForEachInSlice(systemReportReply.Chunks, func(chunkInfo common.PersistedChunkInfo) {
+	common.ForEachInSlice(systemReportReply.Chunks, func(chunkInfo common.PersistedChunkInfo) {
 		chk, ok := ma.chunkServerManager.getChunk(chunkInfo.Handle)
 		if !ok {
 			log.Info().Msg(fmt.Sprintf("=> requesting chunkserver %v to  record as garbage", args.Address))
@@ -602,7 +601,7 @@ func (ma *MasterServer) RPCGetPrimaryAndSecondaryServersInfoHandler(
 		return err
 	}
 
-	utils.ForEachInSlice(staleServers, func(v common.ServerAddr) {
+	common.ForEachInSlice(staleServers, func(v common.ServerAddr) {
 		ma.chunkServerManager.addGarbage(v, args.Handle)
 	})
 	reply.Expire = lease.Expire
@@ -615,7 +614,7 @@ func (ma *MasterServer) RPCGetChunkHandleHandler(
 	args rpc_struct.GetChunkHandleArgs,
 	reply *rpc_struct.GetChunkHandleReply) error {
 	filename := filepath.Base(string(args.Path))
-	err := utils.ValidateFilename(filename, args.Path)
+	err := common.ValidateFilename(filename, args.Path)
 	if err != nil {
 		return err
 	}
@@ -648,7 +647,7 @@ func (ma *MasterServer) RPCGetChunkHandleHandler(
 		if err != nil {
 			return err
 		}
-		addrs = utils.FilterSlice(addrs, func(addr common.ServerAddr) bool { return addr != common.ServerAddr("") })
+		addrs = common.FilterSlice(addrs, func(addr common.ServerAddr) bool { return addr != common.ServerAddr("") })
 		reply.Handle, addrs, err = ma.chunkServerManager.createChunk(args.Path, addrs)
 		if err != nil {
 			return err
@@ -722,14 +721,14 @@ func (ma *MasterServer) RPCDeleteFileHandler(
 			return err
 		}
 
-		utils.ForEachInSlice(handles, func(handle common.ChunkHandle) {
+		common.ForEachInSlice(handles, func(handle common.ChunkHandle) {
 			// Get all replicas for this chunk
 			replicas, err := ma.chunkServerManager.getReplicas(handle)
 			if err != nil {
 				log.Warn().Err(err).Msgf("Failed to get replicas for chunk %v during delete", handle)
 			} else {
 				// Add to garbage list of each server holding this chunk
-				utils.ForEachInSlice(replicas, func(addr common.ServerAddr) {
+				common.ForEachInSlice(replicas, func(addr common.ServerAddr) {
 					ma.chunkServerManager.addGarbage(addr, handle)
 					log.Info().Msgf("Added chunk %v to garbage list of server %v", handle, addr)
 				})
@@ -776,7 +775,7 @@ func (ma *MasterServer) RPCGetReplicasHandler(
 	if err != nil {
 		return err
 	}
-	utils.ForEachInSlice(servers, func(v common.ServerAddr) {
+	common.ForEachInSlice(servers, func(v common.ServerAddr) {
 		reply.Locations = append(reply.Locations, v)
 	})
 	return nil

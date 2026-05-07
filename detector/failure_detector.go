@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caleberi/distributed-system/utils"
+	"github.com/caleberi/distributed-system/common"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
@@ -325,7 +325,7 @@ func (fd *FailureDetector) Predict() (Prediction, error) {
 		return entries[i].Eta.Before(entries[j].Eta)
 	})
 
-	arrivalTimes := utils.TransformSlice(entries, func(entry Entry) float64 {
+	arrivalTimes := common.TransformSlice(entries, func(entry Entry) float64 {
 		return float64(entry.Eta.UnixMilli())
 	})
 
@@ -338,9 +338,9 @@ func (fd *FailureDetector) Predict() (Prediction, error) {
 		return Prediction{}, ErrInsufficientIntervalData
 	}
 
-	mean := utils.Sum(intervals) / float64(len(intervals))
+	mean := common.Sum(intervals) / float64(len(intervals))
 	variance := 0.0
-	utils.ForEachInSlice(intervals, func(v float64) {
+	common.ForEachInSlice(intervals, func(v float64) {
 		variance += math.Pow(v-mean, 2)
 	})
 	variance /= float64(len(intervals))

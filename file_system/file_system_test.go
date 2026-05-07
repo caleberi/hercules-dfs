@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/caleberi/distributed-system/utils"
+	"github.com/caleberi/distributed-system/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +33,7 @@ func TestCreateDir(t *testing.T) {
 		"test3/.op/../../../../k",
 	}
 
-	utils.ForEachInSlice(paths, func(p string) {
+	common.ForEachInSlice(paths, func(p string) {
 		assert.NoError(t, fs.MkDir(p))
 	})
 }
@@ -45,7 +45,7 @@ func TestCreateFile(t *testing.T) {
 	paths := []string{"test1.txt", "dir1/test2.txt", "dir1/subdir/test3.txt"}
 	require.NoError(t, fs.MkDir("dir1/subdir"), "failed to create parent directories")
 
-	utils.ForEachInSlice(paths, func(p string) {
+	common.ForEachInSlice(paths, func(p string) {
 		assert.NoError(t, fs.CreateFile(p), "failed to create file %s", p)
 		info, err := fs.GetStat(p)
 		assert.NoError(t, err, "failed to stat file %s", p)
@@ -63,11 +63,11 @@ func TestDeleteFile(t *testing.T) {
 
 	paths := []string{"test1.txt", "dir1/test2.txt", "dir1/subdir/test3.txt"}
 	require.NoError(t, fs.MkDir("dir1/subdir"), "failed to create parent directories")
-	utils.ForEachInSlice(paths, func(p string) {
+	common.ForEachInSlice(paths, func(p string) {
 		require.NoError(t, fs.CreateFile(p), "failed to create file %s", p)
 	})
 
-	utils.ForEachInSlice(paths, func(p string) {
+	common.ForEachInSlice(paths, func(p string) {
 		assert.NoError(t, fs.RemoveFile(p), "failed to remove file %s", p)
 		_, err := fs.GetStat(p)
 		assert.Error(t, err, "expected error when stating deleted file %s", p)

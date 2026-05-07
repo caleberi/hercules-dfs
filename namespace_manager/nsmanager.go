@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/caleberi/distributed-system/common"
-	"github.com/caleberi/distributed-system/utils"
 )
 
 // SerializedNsTreeNode represents a serialized node in the namespace tree, used for persistence.
@@ -241,7 +240,7 @@ func (nm *NamespaceManager) Create(p common.Path) error {
 		dirpath  string
 	)
 	dirpath, filename = nm.RetrievePartitionFromPath(p)
-	err := utils.ValidateFilename(filename, p)
+	err := common.ValidateFilename(filename, p)
 	if err != nil {
 		return err
 	}
@@ -266,7 +265,7 @@ func (nm *NamespaceManager) Delete(p common.Path) error {
 	defer nm.mu.Unlock()
 
 	dirpath, filename := nm.RetrievePartitionFromPath(p)
-	err := utils.ValidateFilename(filename, p)
+	err := common.ValidateFilename(filename, p)
 	if err != nil {
 		return err
 	}
@@ -384,8 +383,8 @@ func (nm *NamespaceManager) Rename(source, target common.Path) error {
 	srcDirpath, srcName := nm.RetrievePartitionFromPath(source)
 	tgtDirpath, tgtName := nm.RetrievePartitionFromPath(target)
 	err := errors.Join(
-		utils.ValidateFilename(srcName, source),
-		utils.ValidateFilename(tgtName, target),
+		common.ValidateFilename(srcName, source),
+		common.ValidateFilename(tgtName, target),
 	)
 	if err != nil {
 		return fmt.Errorf("invalid path: %v", err)
@@ -496,7 +495,7 @@ func (nm *NamespaceManager) List(p common.Path) ([]common.PathInfo, error) {
 	}
 
 	info := []common.PathInfo{}
-	queue := utils.Deque[*NsTree]{}
+	queue := common.Deque[*NsTree]{}
 	queue.PushBack(dir)
 	for queue.Length() > 0 {
 		current := queue.PopFront()
@@ -566,7 +565,7 @@ func (nm *NamespaceManager) RemoveDir(p common.Path) error {
 	}
 
 	dirpath, dirname := nm.RetrievePartitionFromPath(p)
-	if err := utils.ValidateFilename(dirname, p); err != nil {
+	if err := common.ValidateFilename(dirname, p); err != nil {
 		return err
 	}
 

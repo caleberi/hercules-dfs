@@ -88,9 +88,9 @@ type ChunkServer struct {
     mu              sync.RWMutex              // Protects server state
     listener        net.Listener              // Network listener
     rootDir         *filesystem.FileSystem    // Chunk storage
-    leases          utils.Deque[*common.Lease] // Active leases
+    leases          common.Deque[*common.Lease] // Active leases
     chunks          map[common.ChunkHandle]*chunkInfo // Chunk metadata
-    garbage         utils.Deque[common.ChunkHandle]   // Chunks to delete
+    garbage         common.Deque[common.ChunkHandle]   // Chunks to delete
     archiver        *archivemanager.ArchiverManager   // Compression manager
     downloadBuffer  *downloadbuffer.DownloadBuffer    // Temporary data buffer
     failureDetector *failuredetector.FailureDetector  // Node health monitor

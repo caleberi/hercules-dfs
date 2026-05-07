@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/caleberi/distributed-system/utils"
+	"github.com/caleberi/distributed-system/common"
 	"github.com/rs/zerolog/log"
 )
 
@@ -177,5 +177,5 @@ func BroadcastToRPCServers(addrs []string, method string, args any, replies []an
 	}
 	wg.Wait()
 
-	return utils.TransformSlice(errs, func(err BroadcastError) error { return err.Err })
+	return common.TransformSlice(errs, func(err BroadcastError) error { return err.Err })
 }
