@@ -1,5 +1,10 @@
 package rpc_struct
 
+// RPC handler names used with Go's net/rpc.
+//
+// These constants must exactly match the exported receiver method names on the
+// relevant server types (e.g. MasterServer, ChunkServer). Centralizing them
+// avoids string-typos at call-sites and makes handler renames explicit.
 const (
 	MRPCGetChunkHandleHandler                    = "MasterServer.RPCGetChunkHandleHandler"
 	MRPCGetPrimaryAndSecondaryServersInfoHandler = "MasterServer.RPCGetPrimaryAndSecondaryServersInfoHandler"
