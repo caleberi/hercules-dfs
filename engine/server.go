@@ -25,29 +25,29 @@ type ServerAddress string
 
 // ServerOpts defines configuration options for the HTTP server.
 type ServerOpts struct {
-	EnableTls                    bool          // Whether to enable TLS for secure connections
 	MaxHeaderBytes               int           // Maximum size of request headers in bytes
 	ReadHeaderTimeout            time.Duration // Timeout for reading request headers
 	ReadTimeout                  time.Duration // Timeout for reading the entire request
 	WriteTimeout                 time.Duration // Timeout for writing responses
 	IdleTimeout                  time.Duration // Timeout for idle connections
-	DisableGeneralOptionsHandler bool          // Whether to disable the default OPTIONS handler
-	UseColorizedLogger           bool          // Whether to use a colorized console logger
 	ShutdownTimeout              time.Duration
+	EnableTls                    bool // Whether to enable TLS for secure connections
+	DisableGeneralOptionsHandler bool // Whether to disable the default OPTIONS handler
+	UseColorizedLogger           bool // Whether to use a colorized console logger
 }
 
 // Server represents an HTTP server with support for TLS and graceful shutdown.
 type Server struct {
+	ExternalLogger  zerolog.Logger // External logger for server events
+	ColorizedLogger zerolog.Logger // Colorized console logger (used if enabled)
+	Mux             http.Handler   // HTTP request multiplexer
 	server          *http.Server   // Underlying HTTP server instance
 	shutdownChannel chan os.Signal // Channel for receiving shutdown signals
 	errorLogger     *log.Logger    // Logger for server errors
 	ServerName      string         // Name of the server for logging purposes
-	Opts            ServerOpts     // Server configuration options
 	Address         ServerAddress  // Network address to listen on
 	TlsConfigDir    string         // Directory containing TLS certificate and key files
-	ExternalLogger  zerolog.Logger // External logger for server events
-	ColorizedLogger zerolog.Logger // Colorized console logger (used if enabled)
-	Mux             http.Handler   // HTTP request multiplexer
+	Opts            ServerOpts     // Server configuration options
 	shutdownOnce    sync.Once
 }
 

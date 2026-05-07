@@ -19,15 +19,15 @@ import (
 // It maintains mappings of servers, chunks, and files, and handles synchronization and replica migration.
 // The struct uses multiple locks to ensure thread-safe access to its fields.
 type ChunkServerManager struct {
+	servers                    map[common.ServerAddr]*chunkServerInfo // servers maps server addresses to their corresponding chunk server information.
+	chunks                     map[common.ChunkHandle]*chunkInfo      // chunks maps chunk handles to their corresponding chunk information.
+	files                      map[common.Path]*fileInfo              // files maps file paths to their corresponding file information.
+	handleToPathMapping        map[common.ChunkHandle]common.Path     // handleToPathMapping maps chunk handles to their associated file paths.
+	replicaMigration           []common.ChunkHandle                   // replicaMigration stores chunk handles involved in replica migration operations.
+	numberOfCreatedChunkHandle common.ChunkHandle                     // numberOfCreatedChunkHandle tracks the total number of chunk handles created.
 	sync.RWMutex                                                      // RWMutex provides a global lock for coordinating access to the ChunkServerManager's fields.
 	serverMutex                sync.RWMutex                           // serverMutex protects concurrent access to the servers map.
 	chunkMutex                 sync.RWMutex                           // chunkMutex protects concurrent access to the chunks map.
-	servers                    map[common.ServerAddr]*chunkServerInfo // servers maps server addresses to their corresponding chunk server information.
-	chunks                     map[common.ChunkHandle]*chunkInfo      // chunks maps chunk handles to their corresponding chunk information.
-	replicaMigration           []common.ChunkHandle                   // replicaMigration stores chunk handles involved in replica migration operations.
-	files                      map[common.Path]*fileInfo              // files maps file paths to their corresponding file information.
-	handleToPathMapping        map[common.ChunkHandle]common.Path     // handleToPathMapping maps chunk handles to their associated file paths.
-	numberOfCreatedChunkHandle common.ChunkHandle                     // numberOfCreatedChunkHandle tracks the total number of chunk handles created.
 }
 
 func NewChunkServerManager() *ChunkServerManager {

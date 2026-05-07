@@ -60,8 +60,8 @@ type Buffer interface {
 // BufferedItem represents an item stored in the buffer, containing the data
 // and its expiration time.
 type BufferedItem struct {
-	data   []byte    // The stored data.
 	expire time.Time // The time at which the item expires.
+	data   []byte    // The stored data.
 }
 
 // DownloadBuffer is a thread-safe implementation of the Buffer interface.
@@ -69,9 +69,9 @@ type BufferedItem struct {
 // to clean up expired items based on a configurable tick duration.
 type DownloadBuffer struct {
 	buffer       map[common.BufferId]*BufferedItem // The map storing buffer items.
+	done         chan bool                         // Channel to signal cleanup routine termination.
 	expire, tick time.Duration                     // Durations for expiration and cleanup interval.
 	mu           sync.RWMutex                      // Read-write mutex for thread-safe access.
-	done         chan bool                         // Channel to signal cleanup routine termination.
 }
 
 // NewDownloadBuffer creates a new DownloadBuffer with the specified tick and expire durations.

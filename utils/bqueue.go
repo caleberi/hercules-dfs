@@ -3,10 +3,10 @@ package utils
 import "sync"
 
 type BQueue[T any] struct {
-	mu       sync.Mutex
 	c        sync.Cond
 	data     []T
 	capacity int
+	mu       sync.Mutex
 }
 
 func NewBlockingQueue[T any](capacity int) *BQueue[T] {

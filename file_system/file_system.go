@@ -17,8 +17,8 @@ const filePerm = 0777
 // FileSystem provides thread-safe operations for managing files and directories
 // relative to a root path.
 type FileSystem struct {
-	mu   sync.RWMutex // synchronizes file system operations
 	root string       // base path for all file operations
+	mu   sync.RWMutex // synchronizes file system operations
 }
 
 // NewFileSystem creates a new FileSystem instance with the specified root path.

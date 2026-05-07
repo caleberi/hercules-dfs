@@ -15,37 +15,38 @@ import (
 
 // SerializedNsTreeNode represents a serialized node in the namespace tree, used for persistence.
 type SerializedNsTreeNode struct {
-	IsDir    bool           // Indicates if the node is a directory
-	Path     common.Path    // The path of the node
 	Children map[string]int // Map of child node names to their indices in the serialized slice
+	Path     common.Path    // The path of the node
 	Chunks   int64          // Number of chunks for file nodes
+	IsDir    bool           // Indicates if the node is a directory
 }
 
 // NsTree represents a node in the namespace tree, which can be a file or directory.
 type NsTree struct {
-	sync.RWMutex             // Embedded mutex for thread-safe access
-	Path         common.Path // The path of the node
+	childrenNodes map[string]*NsTree // Map of child nodes (for directory nodes)
+	Path          common.Path        // The path of the node
 
 	// File-related fields
 	Length int64 // Length of the file (for file nodes)
 	Chunks int64 // Number of chunks in the file (for file nodes)
 
+	sync.RWMutex // Embedded mutex for thread-safe access
+
 	// Directory-related fields
-	IsDir         bool               // Indicates if the node is a directory
-	childrenNodes map[string]*NsTree // Map of child nodes (for directory nodes)
+	IsDir bool // Indicates if the node is a directory
 }
 
 // NamespaceManager manages the namespace tree for a distributed file system.
 type NamespaceManager struct {
-	root                 *NsTree             // Root of the namespace tree
-	serializationCount   int                 // Counter for serialization operations
-	deserializationCount int                 // Counter for deserialization operations
-	cleanUpInterval      time.Duration       // Interval for periodic cleanup of deleted nodes
-	deleteCache          map[string]struct{} // Cache for tracking deleted nodes
-	mu                   sync.Mutex
 	ctx                  context.Context
+	root                 *NsTree             // Root of the namespace tree
+	deleteCache          map[string]struct{} // Cache for tracking deleted nodes
 	cancel               context.CancelFunc
 	cleanupChan          chan string
+	serializationCount   int           // Counter for serialization operations
+	deserializationCount int           // Counter for deserialization operations
+	cleanUpInterval      time.Duration // Interval for periodic cleanup of deleted nodes
+	mu                   sync.Mutex
 }
 
 // NewNameSpaceManager creates a new NamespaceManager with the specified cleanup interval.

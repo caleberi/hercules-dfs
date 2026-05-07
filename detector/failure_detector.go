@@ -37,10 +37,10 @@ import (
 type ActionMessage string
 
 type Prediction struct {
-	// The resulting ϕ value
-	Phi float64 `json:"phi"`
 	// Action message
 	Message ActionMessage `json:"message"`
+	// The resulting ϕ value
+	Phi float64 `json:"phi"`
 }
 
 // TripInfo stores timing information for a single direction trip
@@ -66,9 +66,9 @@ func (tf TripInfo) Latency() time.Duration {
 
 // NetworkData contains monitoring details about a single round trip between nodes
 type NetworkData struct {
-	RoundTrip    time.Duration // Total round-trip time
 	ForwardTrip  TripInfo      // Outbound trip timing
 	BackwardTrip TripInfo      // Inbound trip timing
+	RoundTrip    time.Duration // Total round-trip time
 }
 
 // Valid checks if the complete round trip data is consistent
@@ -87,8 +87,8 @@ func (nd *NetworkData) CalculateRoundTrip() {
 }
 
 type Entry struct {
-	Id       string        `json:"id"`
 	Eta      time.Time     `json:"when"`
+	Id       string        `json:"id"`
 	Duration time.Duration `json:"duration"`
 }
 
@@ -175,11 +175,11 @@ var (
 //   - ContextTimeout: Timeout for Redis operations (default: 30s).
 type FailureDetector struct {
 	ShutdownCh     chan bool
-	SuspicionLevel SuspicionLevel
 	Window         *SamplingWindow[Entry]
+	SuspicionLevel SuspicionLevel
 	ContextTimeout time.Duration
-	shutdownOnce   sync.Once
 	mu             sync.RWMutex
+	shutdownOnce   sync.Once
 	isShutdown     bool
 }
 

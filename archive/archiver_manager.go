@@ -35,8 +35,8 @@ const (
 
 // ResultInfo contains the result of a compression or decompression operation.
 type ResultInfo struct {
-	Path common.Path // Resulting file path after operation
 	Err  error       // Error if operation failed
+	Path common.Path // Resulting file path after operation
 }
 
 // CompressPipeline manages compression tasks and results.
@@ -54,14 +54,14 @@ type DecompressPipeline struct {
 // ArchiverManager manages concurrent compression and decompression operations.
 // It uses a worker pool pattern to process files efficiently.
 type ArchiverManager struct {
-	mu                 sync.RWMutex       // Protects isClosed flag
 	CompressPipeline   CompressPipeline   // Pipeline for compression operations
 	DecompressPipeline DecompressPipeline // Pipeline for decompression operations
-	fileSystem         *filesystem.FileSystem
 	ctx                context.Context
+	fileSystem         *filesystem.FileSystem
 	cancel             context.CancelFunc
 	wg                 sync.WaitGroup
-	isClosed           bool // Indicates if archiver has been closed
+	mu                 sync.RWMutex // Protects isClosed flag
+	isClosed           bool         // Indicates if archiver has been closed
 }
 
 // NewArchiver creates a new ArchiverManager with the specified number of workers.

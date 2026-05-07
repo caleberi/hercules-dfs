@@ -8,17 +8,17 @@ import (
 )
 
 type HeartBeatArgs struct {
+	NetworkData   detector.NetworkData
 	Address       common.ServerAddr
 	PendingLeases []*common.Lease
 	MachineInfo   common.MachineInfo
 	ExtendLease   bool
-	NetworkData   detector.NetworkData
 }
 type HeartBeatReply struct {
+	NetworkData     detector.NetworkData
 	LastHeartBeat   time.Time
 	LeaseExtensions []*common.Lease
 	Garbage         []common.ChunkHandle
-	NetworkData     detector.NetworkData
 }
 
 type ChunkServerHeartBeatArgs struct {
@@ -31,8 +31,8 @@ type ChunkServerHeartBeatReply struct {
 
 type SysReportInfoArgs struct{}
 type SysReportInfoReply struct {
-	SysMem common.Memory
 	Chunks []common.PersistedChunkInfo
+	SysMem common.Memory
 }
 
 type CheckChunkVersionArgs struct {
@@ -44,11 +44,11 @@ type CheckChunkVersionReply struct {
 }
 
 type ReadChunkArgs struct {
-	Offset common.Offset
+	Lease  *common.Lease
 	Data   []byte
+	Offset common.Offset
 	Length int64
 	Handle common.ChunkHandle
-	Lease  *common.Lease
 }
 
 type ReadChunkReply struct {
@@ -66,9 +66,9 @@ type CreateChunkReply struct {
 }
 
 type ForwardDataArgs struct {
-	DownloadBufferId common.BufferId
 	Data             []byte
 	Replicas         []common.ServerAddr
+	DownloadBufferId common.BufferId
 }
 
 type ForwardDataReply struct {
@@ -76,9 +76,9 @@ type ForwardDataReply struct {
 }
 
 type WriteChunkArgs struct {
+	Replicas         []common.ServerAddr
 	DownloadBufferId common.BufferId
 	Offset           common.Offset
-	Replicas         []common.ServerAddr
 }
 
 type WriteChunkReply struct {
@@ -98,8 +98,8 @@ type ApplyMutationReply struct {
 }
 
 type AppendChunkArgs struct {
-	DownloadBufferId common.BufferId
 	Replicas         []common.ServerAddr
+	DownloadBufferId common.BufferId
 }
 
 type AppendChunkReply struct {
@@ -108,8 +108,8 @@ type AppendChunkReply struct {
 }
 
 type GetSnapshotArgs struct {
-	Handle   common.ChunkHandle
 	Replicas common.ServerAddr
+	Handle   common.ChunkHandle
 }
 
 type GetSnapshotReply struct {
@@ -117,8 +117,8 @@ type GetSnapshotReply struct {
 }
 
 type ApplyCopyArgs struct {
-	Handle  common.ChunkHandle
 	Data    []byte
+	Handle  common.ChunkHandle
 	Version common.ChunkVersion
 }
 type ApplyCopyReply struct {
@@ -126,9 +126,9 @@ type ApplyCopyReply struct {
 }
 
 type PrimaryAndSecondaryServersInfoReply struct {
+	Expire           time.Time
 	Primary          common.ServerAddr
 	SecondaryServers []common.ServerAddr
-	Expire           time.Time
 }
 
 type PrimaryAndSecondaryServersInfoArg struct {
@@ -212,11 +212,11 @@ type RetrieveReplicasReply struct {
 }
 
 type GrantLeaseInfoArgs struct {
-	Handle      common.ChunkHandle
 	Expire      time.Time
-	InUse       bool
 	Primary     common.ServerAddr
 	Secondaries []common.ServerAddr
+	Handle      common.ChunkHandle
+	InUse       bool
 }
 
 type GrantLeaseInfoReply struct {

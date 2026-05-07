@@ -28,21 +28,21 @@ import (
 )
 
 type chunkServerInfo struct {
-	sync.RWMutex
 	lastHeartBeat time.Time
 	chunks        map[common.ChunkHandle]bool
 	garbages      []common.ChunkHandle
 	serverInfo    common.MachineInfo
+	sync.RWMutex
 }
 
 type chunkInfo struct {
-	sync.RWMutex
-	locations []common.ServerAddr
-	primary   common.ServerAddr
 	expire    time.Time // ??
-	version   common.ChunkVersion
+	primary   common.ServerAddr
 	checksum  common.Checksum
 	path      common.Path
+	locations []common.ServerAddr
+	version   common.ChunkVersion
+	sync.RWMutex
 }
 
 func (chkInfo *chunkInfo) isExpired(u time.Time) bool {
@@ -50,8 +50,8 @@ func (chkInfo *chunkInfo) isExpired(u time.Time) bool {
 }
 
 type fileInfo struct {
-	sync.RWMutex
 	handles []common.ChunkHandle
+	sync.RWMutex
 }
 
 type serialChunkInfo struct {
@@ -76,15 +76,15 @@ type MasterServerConfig struct {
 }
 
 type MasterServer struct {
-	sync.RWMutex
-	ServerAddr         common.ServerAddr
-	rootDir            *filesystem.FileSystem
 	listener           net.Listener
+	rootDir            *filesystem.FileSystem
 	namespaceManager   *namespacemanager.NamespaceManager
 	chunkServerManager *ChunkServerManager
 	detector           *detector.FailureDetector
-	isDead             bool
 	shutdownChan       chan os.Signal
+	ServerAddr         common.ServerAddr
+	sync.RWMutex
+	isDead bool
 }
 
 func NewMasterServer(ctx context.Context, config MasterServerConfig) *MasterServer {
@@ -196,13 +196,13 @@ func NewMasterServer(ctx context.Context, config MasterServerConfig) *MasterServ
 			case <-ma.shutdownChan:
 				return
 			case <-serverHealthCheck.C:
-				branchInfo.Event = string(common.MasterHeartBeat)
+				branchInfo.Event = common.MasterHeartBeat
 				branchInfo.Err = ma.serverHeartBeat()
 			case <-persistMetadataCheck.C:
-				branchInfo.Event = string(common.PersistMetaData)
+				branchInfo.Event = common.PersistMetaData
 				branchInfo.Err = ma.persistMetaData()
 			case <-failurePredictionCheck.C:
-				branchInfo.Event = string(common.FailurePrediction)
+				branchInfo.Event = common.FailurePrediction
 				prediction, err := ma.detector.Predict()
 				if err != nil {
 					branchInfo.Err = err

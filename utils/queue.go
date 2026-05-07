@@ -23,10 +23,10 @@ type Node[T any] struct {
 //	queue.PushBack(10)
 //	val := queue.PopFront()
 type Deque[T any] struct {
-	mu     sync.RWMutex // for synchroncize access to queue
 	head   *Node[T]
 	tail   *Node[T]
 	length int64
+	mu     sync.RWMutex // for synchroncize access to queue
 }
 
 func (qs *Deque[T]) Length() int64 {

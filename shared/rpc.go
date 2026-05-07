@@ -88,9 +88,9 @@ func UnicastToRPCServer[T, V any](addr string, method string, args T, reply V, c
 }
 
 type BroadcastError struct {
-	Index int
-	Addr  string
 	Err   error
+	Addr  string
+	Index int
 }
 
 // BroadcastToRPCServers sends an RPC request to multiple servers concurrently.

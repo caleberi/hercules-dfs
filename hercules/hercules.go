@@ -25,8 +25,8 @@ type HerculesClient struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	cache    map[common.ChunkHandle]*common.Lease
-	cacheMux sync.RWMutex
 	master   common.ServerAddr
+	cacheMux sync.RWMutex
 }
 
 // NewHerculesClient creates a new HerculesClient instance.

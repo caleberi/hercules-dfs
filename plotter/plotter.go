@@ -41,9 +41,9 @@ var ColorsPaletteMap = map[string]color.RGBA{
 }
 
 type GraphTitle struct {
+	Style   *text.Style
 	Text    string
 	Padding vg.Length
-	Style   *text.Style
 }
 
 type GraphConfig struct {
@@ -55,8 +55,8 @@ type GraphConfig struct {
 }
 
 type GraphLabelPoint struct {
-	Label  string
 	Points plotter.XYer
+	Label  string
 }
 
 type Graph struct {

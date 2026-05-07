@@ -39,11 +39,12 @@ import (
 // It tracks versioning, mutation operations, and status flags for data integrity
 // and synchronization purposes.
 type chunkInfo struct {
-	sync.RWMutex // handling lock during mutation ops
+	creationTime time.Time // creation time of the chunk
+	lastModified time.Time // last modified time of the chunk
+	accessTime   time.Time // last access time of the chunk
 
-	completed    bool // indicates if mutation was ever marked done
-	abandoned    bool // indicates if mutation was ever marked abandoned
-	isCompressed bool // indicates if the chunk is compressed
+	mutations map[common.ChunkVersion]common.Mutation // all necessary mutations to be committed for this chunk to FS
+	checksum  common.Checksum                         // tracking data corruption
 
 	replication  int // number of replicas for this chunk
 	serverStatus int // status of the server hosting this chunk
@@ -51,63 +52,69 @@ type chunkInfo struct {
 	length  common.Offset       // last known offset of this chunk
 	version common.ChunkVersion // latest version for data reconciliation (current version)
 
-	creationTime time.Time // creation time of the chunk
-	lastModified time.Time // last modified time of the chunk
-	accessTime   time.Time // last access time of the chunk
+	sync.RWMutex // handling lock during mutation ops
 
-	mutations map[common.ChunkVersion]common.Mutation // all necessary mutations to be committed for this chunk to FS
-	checksum  common.Checksum                         // tracking data corruption
+	completed    bool // indicates if mutation was ever marked done
+	abandoned    bool // indicates if mutation was ever marked abandoned
+	isCompressed bool // indicates if the chunk is compressed
+
 }
 
 // ChunkServer represents a server instance in a distributed file system, managing
 // chunk metadata, leases, and system resources. It handles network communication,
 // failure detection, and garbage collection for chunks.
 type ChunkServer struct {
-	mu       sync.RWMutex // mutex for synchronizing access to server state
 	listener net.Listener // network listener for incoming connections
 
-	rootDir *filesystem.FileSystem     // root directory file system for chunk storage
-	leases  utils.Deque[*common.Lease] // deque of active leases for chunk access
+	rootDir *filesystem.FileSystem // root directory file system for chunk storage
 
 	archiver        *archivemanager.ArchiverManager // manager for archiving chunks
 	downloadBuffer  *downloadbuffer.DownloadBuffer  // buffer for handling downloads
 	failureDetector *detector.FailureDetector       // detector for identifying node failures
 
-	garbageMu sync.Mutex                        // mutex for synchronizing access to the garbage collection list
-	garbage   utils.Deque[common.ChunkHandle]   // deque of chunks marked for garbage collection
-	chunks    map[common.ChunkHandle]*chunkInfo // map of chunk handles to their metadata
+	chunks map[common.ChunkHandle]*chunkInfo // map of chunk handles to their metadata
 
-	isDead       bool           // indicates if the server is marked as dead
 	shutdownChan chan os.Signal // channel for handling shutdown signals
+
+	leases utils.Deque[*common.Lease] // deque of active leases for chunk access
+
+	garbage utils.Deque[common.ChunkHandle] // deque of chunks marked for garbage collection
 
 	ServerAddr  common.ServerAddr  // address of this server
 	MasterAddr  common.ServerAddr  // address of the master server
 	MachineInfo common.MachineInfo // information about the server's machine
+	mu          sync.RWMutex       // mutex for synchronizing access to server state
+
+	garbageMu sync.Mutex // mutex for synchronizing access to the garbage collection list
+
+	isDead bool // indicates if the server is marked as dead
 }
 
 // PersistedMetaData represents metadata associated with a chunk in a Google File System (GFS).
 // It stores identifying information, versioning, and status details for a chunk, used for data
 // integrity and management in a distributed file system.
 type PersistedMetaData struct {
-	Handle  common.ChunkHandle  // Unique identifier for the chunk
-	Version common.ChunkVersion // Latest persisted version number of the chunk
-	Length  common.Offset       // Offset in the chunk
+	CreationTime time.Time                               // Creation timestamp of the chunk
+	LastModified time.Time                               // Last modified timestamp of the chunk
+	AccessTime   time.Time                               // Last access timestamp of the chunk
+	Mutations    map[common.ChunkVersion]common.Mutation // Map of mutations to be applied to the chunk
 
-	ChunkSize            int64                                   // Size of the chunk in bytes
-	Mutations            map[common.ChunkVersion]common.Mutation // Map of mutations to be applied to the chunk
-	Completed, Abandoned bool                                    // Indicates if the chunk is completed (filled) or abandoned
-
-	Checksum        common.Checksum // Checksum or hash of the chunk data for integrity verification
-	Replication     int             // Number of replicas for this chunk
-	ServerStatus    int             // Last known status of the chunk server
-	MetadataVersion int             // Version of the metadata associated with the chunk
+	Checksum common.Checksum // Checksum or hash of the chunk data for integrity verification
 
 	ServerIP    string   // IP address of the chunk server hosting the chunk
 	StatusFlags []string // Flags indicating the status of the chunk (e.g., active, corrupted)
 
-	CreationTime time.Time // Creation timestamp of the chunk
-	LastModified time.Time // Last modified timestamp of the chunk
-	AccessTime   time.Time // Last access timestamp of the chunk
+	Handle  common.ChunkHandle  // Unique identifier for the chunk
+	Version common.ChunkVersion // Latest persisted version number of the chunk
+	Length  common.Offset       // Offset in the chunk
+
+	ChunkSize       int64 // Size of the chunk in bytes
+	Replication     int   // Number of replicas for this chunk
+	ServerStatus    int   // Last known status of the chunk server
+	MetadataVersion int   // Version of the metadata associated with the chunk
+
+	Completed, Abandoned bool // Indicates if the chunk is completed (filled) or abandoned
+
 }
 
 // NewChunkServer initializes and starts a new ChunkServer instance.
@@ -143,7 +150,7 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 	failureDetector, err := failuredetector.NewFailureDetector(
 		string(masterAddr), 1000,
 		&redis.Options{Addr: string(redisAddr)},
-		common.FailureDetectorKeyExipiryTime,
+		common.FailureDetectorKeyExpiryTime,
 		failuredetector.SuspicionLevel{
 			AccumulationThreshold: 7,
 			UpperBoundThreshold:   3,
@@ -232,7 +239,7 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 		defer archiveChunkTicker.Stop()
 
 		var branchInfo common.BranchInfo
-		branchInfo.Event = string(common.HeartBeat)
+		branchInfo.Event = common.HeartBeat
 		branchInfo.Err = cs.heartBeat()
 
 		// the paper mentioned the chunk server sending heartbeat at every
@@ -249,16 +256,16 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 				time.Sleep(time.Second * 1)
 				return
 			case <-heartBeatTicker.C:
-				branchInfo.Event = string(common.HeartBeat)
+				branchInfo.Event = common.HeartBeat
 				branchInfo.Err = cs.heartBeat()
 			case <-persistMetaDataTicker.C:
-				branchInfo.Event = string(common.PersistMetaData)
+				branchInfo.Event = common.PersistMetaData
 				branchInfo.Err = cs.persistMetadata()
 			case <-garbageCollectionTicker.C:
-				branchInfo.Event = string(common.GarbageCollection)
+				branchInfo.Event = common.GarbageCollection
 				branchInfo.Err = cs.garbageCollection()
 			case <-archiveChunkTicker.C:
-				branchInfo.Event = string(common.Archival)
+				branchInfo.Event = common.Archival
 				branchInfo.Err = cs.archiveChunks()
 			}
 

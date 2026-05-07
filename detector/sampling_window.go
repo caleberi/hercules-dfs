@@ -16,10 +16,10 @@ type Scorer interface {
 }
 
 type SamplingWindow[T Scorer] struct {
+	rdb  *redis.Client
 	key  string
 	size int
 	ttl  time.Duration
-	rdb  *redis.Client
 }
 
 // addScript atomically:

@@ -31,15 +31,15 @@ type HerculesHTTPGateway struct {
 
 // GatewayConfig defines configuration options for the HTTP gateway.
 type GatewayConfig struct {
-	ServerName     string        // Server name for logging
-	Address        int           // Server port
 	Logger         io.Writer     // Logger writer
+	ServerName     string        // Server name for logging
 	TlsDir         string        // TLS certificate directory
-	EnableTLS      bool          // Enable TLS
+	Address        int           // Server port
 	MaxHeaderBytes int           // Maximum header size
 	ReadTimeout    time.Duration // HTTP read timeout
 	WriteTimeout   time.Duration // HTTP write timeout
 	IdleTimeout    time.Duration // HTTP idle timeout
+	EnableTLS      bool          // Enable TLS
 }
 
 // DefaultGatewayConfig returns sensible default configuration values.
@@ -183,9 +183,9 @@ type ErrorResponse struct {
 }
 
 type SuccessResponse struct {
-	Success bool   `json:"success"`
 	Data    any    `json:"data,omitempty"`
 	Message string `json:"message,omitempty"`
+	Success bool   `json:"success"`
 }
 
 func (g *HerculesHTTPGateway) respondJSON(c *gin.Context, status int, data interface{}) {
