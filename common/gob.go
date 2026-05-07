@@ -1,4 +1,4 @@
-package library
+package common
 
 import (
 	gob "encoding/gob"
@@ -171,3 +171,4 @@ func checkDefaultHelper(value reflect.Value, depth int, name string) {
 	}
 
 }
+

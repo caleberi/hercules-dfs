@@ -26,7 +26,6 @@ import (
 	failuredetector "github.com/caleberi/distributed-system/detector"
 	downloadbuffer "github.com/caleberi/distributed-system/download_buffer"
 	filesystem "github.com/caleberi/distributed-system/file_system"
-	"github.com/caleberi/distributed-system/library"
 	"github.com/caleberi/distributed-system/rpc_struct"
 	"github.com/caleberi/distributed-system/shared"
 	"github.com/caleberi/distributed-system/utils"
@@ -413,7 +412,7 @@ func (cs *ChunkServer) loadMetadata() error {
 	}()
 
 	var metas []PersistedMetaData
-	decoder := library.NewDecoder(file)
+	decoder := common.NewDecoder(file)
 	err = decoder.Decode(&metas)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -568,7 +567,7 @@ func (cs *ChunkServer) persistMetadata() error {
 		metadatas = append(metadatas, persistMetadata)
 	}
 	log.Info().Msgf("Server %v : store metadata len: %v", cs.ServerAddr, len(metadatas))
-	encoder := library.NewEncoder(file)
+	encoder := common.NewEncoder(file)
 	return encoder.Encode(metadatas)
 }
 
