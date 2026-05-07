@@ -564,11 +564,18 @@ func (csm *ChunkServerManager) SerializeChunks() []serialChunkInfo {
 
 	var ret []serialChunkInfo
 	for k, v := range csm.files {
+		if v == nil {
+			continue
+		}
 		var chunks []common.PersistedChunkInfo
 		for _, handle := range v.handles {
+			var version common.ChunkVersion
+			if chk, ok := csm.chunks[handle]; ok && chk != nil {
+				version = chk.version
+			}
 			chunks = append(chunks, common.PersistedChunkInfo{
 				Handle:   handle,
-				Version:  csm.chunks[handle].version,
+				Version:  version,
 				Checksum: "",
 				Length:   0,
 			})

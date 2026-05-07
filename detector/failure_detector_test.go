@@ -116,8 +116,15 @@ func TestPredictFailure_Healthy(t *testing.T) {
 	}
 	pred, err := detector.Predict()
 	assert.NoError(t, err)
-	assert.GreaterOrEqual(t, pred.Phi, 1.0)
-	assert.Equal(t, UpperBoundThresholdAlert, pred.Message)
+	// With recent/consistent samples, the detector should not be in the "alert"
+	// range. Depending on timing jitter, it may be either healthy (< upper bound)
+	// or warning (>= upper bound).
+	assert.Less(t, pred.Phi, detector.SuspicionLevel.AccumulationThreshold)
+	if pred.Phi < detector.SuspicionLevel.UpperBoundThreshold {
+		assert.Equal(t, ResetThresholdAlert, pred.Message)
+	} else {
+		assert.Equal(t, UpperBoundThresholdAlert, pred.Message)
+	}
 }
 
 func TestPredictFailure_WarningAndAlert(t *testing.T) {

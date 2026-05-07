@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -85,19 +86,37 @@ func sanitizePathForGateway(s string) string {
 	return strings.ReplaceAll(s, " ", "_")
 }
 
+func freeTCPAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return addr
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return port
+}
+
 func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 	ctx := t.Context()
 	masterDir := t.TempDir()
 
-	masterAddr := "127.0.0.1:9091"
+	masterAddr := freeTCPAddr(t)
 	master := setupMasterServerForGateway(t, ctx, masterDir, masterAddr)
 
 	slaves := []*chunkserver.ChunkServer{}
-	for i := range 4 {
+	for range 4 {
 		slave := setupChunkServerForGateway(
 			t,
 			t.TempDir(),
-			fmt.Sprintf("127.0.0.1:%d", 11000+i),
+			freeTCPAddr(t),
 			masterAddr,
 		)
 		slaves = append(slaves, slave)
@@ -114,7 +133,7 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 
 	config := DefaultGatewayConfig()
 	config.ServerName = "test-gateway"
-	config.Address = 8082
+	config.Address = freeTCPPort(t)
 	config.Logger = os.Stdout
 	config.EnableTLS = false
 	config.ReadTimeout = 10 * time.Second
@@ -132,7 +151,7 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 	}()
 
 	_, paths := populateGatewayTestData(t, client)
-	baseURL := "http://127.0.0.1:8082"
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", config.Address)
 
 	t.Run("Health_Check", func(t *testing.T) {
 		resp, err := http.Get(baseURL + "/health")
@@ -422,7 +441,8 @@ func TestHerculesHTTPGatewayIntegration(t *testing.T) {
 		assert.Equal(t, http.StatusOK, createResp.StatusCode, "Expected HTTP 200 OK")
 		createResp.Body.Close()
 
-		encodedPath := url.QueryEscape(".")
+		// List expects a namespace path rooted at "/"; "." is not a valid namespace path.
+		encodedPath := url.QueryEscape("/")
 
 		resp, err := http.Get(fmt.Sprintf("%s/api/v1/list?path=%s", baseURL, encodedPath))
 		require.NoError(t, err, "List request failed")
