@@ -2,11 +2,14 @@ package common
 
 import "time"
 
+type Event string
+
 type BranchInfo struct {
 	Err   error
-	Event string
+	Event Event
 }
 
+// Scheduled event types
 const (
 	HeartBeat         Event = "HeartBeat"
 	GarbageCollection Event = "GarbageCollection"
@@ -18,47 +21,49 @@ const (
 )
 
 const (
+	// namespace
 	DeletedNamespaceFilePrefix string = "___deleted__"
 
 	// archiving mechanism
 	ArchivalDaySpan                    = 5
 	ArchiveChunkInterval time.Duration = ArchivalDaySpan * 24 * time.Hour
 
-	// failure dectection
-	FailureDetectorKeyExipiryTime time.Duration = 5 * time.Minute
+	// failure detection
+	FailureDetectorKeyExpiryTime time.Duration = 5 * time.Minute
 
 	// chunk server
 	HeartBeatInterval         time.Duration = 5 * time.Second
 	GarbageCollectionInterval time.Duration = 5 * time.Minute
 	PersistMetaDataInterval   time.Duration = 10 * time.Minute
 
-	// chunk file information
+	// chunk file
 	ChunkMetaDataFileName = "chunk.server.meta"
 	ChunkFileNameFormat   = "chunk-%v.chk"
 	ChunkMaxSizeInMb      = 64
 	ChunkMaxSizeInByte    = 64 << 20 // 1024 * 1024 * 64
 	AppendMaxSizeInByte   = ChunkMaxSizeInByte / 4
 
-	// downloadbuffer
-	DownloadBufferItemExpire = 10 * time.Second
-	DownloadBufferTick       = 10 * time.Second
+	// download buffer
+	DownloadBufferItemExpire time.Duration = 10 * time.Second
+	DownloadBufferTick       time.Duration = 10 * time.Second
 
 	// master server
-	ServerHealthCheckInterval time.Duration = 10 * time.Second
+	MasterMetaDataFileName                  = "master.server.meta"
 	MasterPersistMetaInterval time.Duration = 15 * time.Hour
+	ServerHealthCheckInterval time.Duration = 10 * time.Second
 	ServerHealthCheckTimeout  time.Duration = 60 * time.Second
 	FailurePredictionInterval time.Duration = 10 * time.Second
-	MasterMetaDataFileName                  = "master.server.meta"
 
-	// replicationFactor
+	// replication
 	MinimumReplicationFactor = 3
+	LeaseTimeout             = 120 * time.Second
 
-	LeaseTimeout = 120 * time.Second
-
-	// file constant
+	// filesystem
 	FileMode = 0755
+)
 
-	// Mutation flags
+// Mutation flags
+const (
 	MutationAppend = (iota + 1) << 1
 	MutationWrite
 	MutationPad
