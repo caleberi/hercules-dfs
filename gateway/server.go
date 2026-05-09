@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,8 +73,9 @@ func NewHerculesHTTPGateway(
 				"Content-Type", "Content-Length",
 				"accept", "origin", "Cache-Control",
 			},
-			ExposeHeaders:    []string{"Content-Length"},
-			AllowCredentials: true,
+			ExposeHeaders: []string{"Content-Length"},
+			// Wildcard origins are incompatible with credentialed requests in browsers.
+			AllowCredentials: false,
 			AllowWildcard:    false,
 			MaxAge:           12 * time.Hour,
 		}))
@@ -164,6 +166,10 @@ func (g *HerculesHTTPGateway) Shutdown() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if g.client != nil {
+		g.client.Close()
+	}
+
 	g.cancel()
 
 	if g.server == nil {
@@ -195,7 +201,8 @@ func (g *HerculesHTTPGateway) respondJSON(c *gin.Context, status int, data inter
 func (g *HerculesHTTPGateway) respondError(c *gin.Context, status int, err error) {
 	g.logger.Error().Err(err).Int("status", status).Msg("Request error")
 	code := ""
-	if cerr, ok := err.(common.Error); ok {
+	var cerr common.Error
+	if errors.As(err, &cerr) {
 		code = fmt.Sprint(cerr.Code)
 	}
 	c.JSON(status, ErrorResponse{
@@ -446,6 +453,10 @@ func (g *HerculesHTTPGateway) handleRead(c *gin.Context) {
 	length, err := strconv.ParseInt(lengthStr, 10, 64)
 	if err != nil || length <= 0 {
 		length = 4096
+	}
+	const maxReadLen = 64 << 20 // cap single read to limit memory / abuse
+	if length > maxReadLen {
+		length = maxReadLen
 	}
 
 	data := make([]byte, length)

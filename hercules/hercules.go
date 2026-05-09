@@ -52,6 +52,11 @@ func NewHerculesClient(ctx context.Context, address common.ServerAddr, cleanup t
 	return hercules
 }
 
+// Close stops background work (lease cleanup). It does not close RPC connections to the master.
+func (hercules *HerculesClient) Close() {
+	hercules.cancel()
+}
+
 // cleanLease periodically removes expired leases from the cache.
 // It runs in a goroutine and checks for expired leases at the specified interval.
 // The cleanup stops when the client's context is canceled.
@@ -59,6 +64,9 @@ func NewHerculesClient(ctx context.Context, address common.ServerAddr, cleanup t
 // Parameters:
 //   - d: The duration between cleanup operations.
 func (hercules *HerculesClient) cleanLease(d time.Duration) {
+	if d <= 0 {
+		d = time.Minute
+	}
 	cleanup := func(handle common.ChunkHandle, lease *common.Lease) {
 		if lease.IsExpired(time.Now()) {
 			delete(hercules.cache, lease.Handle)
@@ -90,9 +98,15 @@ func (hercules *HerculesClient) cleanLease(d time.Duration) {
 func (hercules *HerculesClient) GetChunkServers(handle common.ChunkHandle) (*common.Lease, error) {
 	hercules.cacheMux.RLock()
 	lease, exists := hercules.cache[handle]
+	stale := exists && lease.IsExpired(time.Now())
 	hercules.cacheMux.RUnlock()
-	if exists {
+	if exists && !stale {
 		return lease, nil
+	}
+	if stale {
+		hercules.cacheMux.Lock()
+		delete(hercules.cache, handle)
+		hercules.cacheMux.Unlock()
 	}
 
 	var primaryAndSecondaryServersReply rpc_struct.PrimaryAndSecondaryServersInfoReply
@@ -137,19 +151,16 @@ func (hercules *HerculesClient) GetChunkServers(handle common.ChunkHandle) (*com
 //   - The offset (always 0 in this implementation).
 //   - An error if the lease cannot be retrieved.
 func (hercules *HerculesClient) ObtainLease(handle common.ChunkHandle, offset common.Offset) (*common.Lease, common.Offset, error) {
-	hercules.cacheMux.RLock()
+	hercules.cacheMux.Lock()
 	lease, exists := hercules.cache[handle]
-	if exists {
-		hercules.cacheMux.RUnlock()
-		if !lease.IsExpired(time.Now()) {
-			return lease, 0, nil
-		}
-		hercules.cacheMux.Lock()
-		delete(hercules.cache, handle)
+	if exists && !lease.IsExpired(time.Now()) {
 		hercules.cacheMux.Unlock()
-		lease = nil
+		return lease, 0, nil
 	}
-	hercules.cacheMux.RUnlock()
+	if exists {
+		delete(hercules.cache, handle)
+	}
+	hercules.cacheMux.Unlock()
 
 	lease, err := hercules.GetChunkServers(handle)
 	if err != nil {
@@ -324,6 +335,7 @@ func (hercules *HerculesClient) Read(path common.Path, offset common.Offset, dat
 	}
 
 	pos := 0
+	var readEOF bool
 	for pos < len(data) {
 		index := common.Offset(offset / common.ChunkMaxSizeInByte)
 		chunkOffset := offset % common.ChunkMaxSizeInByte
@@ -338,26 +350,28 @@ func (hercules *HerculesClient) Read(path common.Path, offset common.Offset, dat
 			return -1, err
 		}
 
-		n, err := hercules.ReadChunk(handle, chunkOffset, data[pos:])
+		rn, rerr := hercules.ReadChunk(handle, chunkOffset, data[pos:])
 
-		if err != nil {
-			if err.(common.Error).Code == common.ReadEOF {
+		if rerr != nil {
+			var ce common.Error
+			if errors.As(rerr, &ce) && ce.Code == common.ReadEOF {
+				offset += common.Offset(rn)
+				pos += rn
+				readEOF = true
 				break
 			}
-			return -1, err
+			return -1, rerr
 		}
 
-		offset += common.Offset(n)
-		pos += n
+		offset += common.Offset(rn)
+		pos += rn
 	}
 
-	if err != nil {
-		if err.(common.Error).Code == common.ReadEOF {
-			return pos, io.EOF
-		}
+	if readEOF {
+		return pos, io.EOF
 	}
 
-	return pos, err
+	return pos, nil
 }
 
 // ReadChunk reads data from a specific chunk at the given handle and offset into the provided buffer.
@@ -452,7 +466,7 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 	}
 
 	if reply.IsDir {
-		return -1, fmt.Errorf("cannot read %s since it is a directory", path)
+		return -1, fmt.Errorf("cannot write %s since it is a directory", path)
 	}
 
 	pos := 0
@@ -498,7 +512,7 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 		if err != nil && n == 0 && chunkOffset == 0 {
 			continue
 		}
-		offset += common.Offset(writeLength)
+		offset += common.Offset(n)
 		pos += n
 		if pos == len(data) {
 			break
@@ -506,7 +520,13 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 	}
 
 	newLength := startOffset + common.Offset(len(data))
-	newChunks := int64((offset-1)/common.ChunkMaxSizeInByte + 1)
+	var newChunks int64
+	if len(data) == 0 {
+		newChunks = reply.Chunks
+	} else {
+		lastByte := startOffset + common.Offset(len(data)) - 1
+		newChunks = int64(lastByte/common.ChunkMaxSizeInByte + 1)
+	}
 	if newLength > common.Offset(reply.Length) {
 		updateArgs := rpc_struct.UpdateFileMetadataArgs{
 			Path:   path,
@@ -520,7 +540,7 @@ func (hercules *HerculesClient) Write(path common.Path, offset common.Offset, da
 		}
 	}
 
-	return int(offset), nil
+	return pos, nil
 }
 
 // WriteChunk writes data to a specific chunk at the given handle and offset.
@@ -567,15 +587,15 @@ func (hercules *HerculesClient) WriteChunk(handle common.ChunkHandle, offset com
 			var d rpc_struct.ForwardDataReply
 			if addr != "" {
 				replicas := common.FilterSlice(servers, func(v common.ServerAddr) bool { return v != addr })
-				err = shared.UnicastToRPCServer(string(addr),
+				fwdErr := shared.UnicastToRPCServer(string(addr),
 					rpc_struct.CRPCForwardDataHandler,
 					rpc_struct.ForwardDataArgs{
 						DownloadBufferId: dataID,
 						Data:             data,
 						Replicas:         replicas,
 					}, &d, shared.DefaultRetryConfig)
-				if err != nil {
-					errs = append(errs, err.Error())
+				if fwdErr != nil {
+					errs = append(errs, fwdErr.Error())
 				}
 			}
 		})

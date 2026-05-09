@@ -58,7 +58,7 @@ func freeTCPAddr(t *testing.T) string {
 }
 
 func populateServers(t *testing.T, client *HerculesClient) []common.ChunkHandle {
-	rand.NewSource(time.Now().UnixNano())
+	rand.Seed(time.Now().UnixNano())
 	chunkHandles := []common.ChunkHandle{}
 	fake := faker.New()
 
