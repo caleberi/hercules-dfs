@@ -1,8 +1,50 @@
 @import "tailwindcss";
 
+:root {
+	color-scheme: dark;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	background-color: #12141d;
+	font-family:
+		ui-sans-serif,
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		'Helvetica Neue',
+		Arial,
+		sans-serif;
+}
+
 .app-shell {
 	background:
-		radial-gradient(900px 420px at 10% -10%, rgba(13, 148, 136, 0.18), rgba(2, 6, 23, 0) 60%),
-		radial-gradient(800px 360px at 110% 0%, rgba(251, 191, 36, 0.18), rgba(2, 6, 23, 0) 55%),
-		linear-gradient(180deg, #020617 0%, #0f172a 55%, #111827 100%);
+		radial-gradient(900px 420px at 10% -10%, rgba(59, 130, 246, 0.12), rgba(18, 20, 29, 0) 55%),
+		radial-gradient(720px 380px at 100% 0%, rgba(249, 115, 22, 0.1), rgba(18, 20, 29, 0) 50%),
+		linear-gradient(180deg, #12141d 0%, #161824 45%, #12141d 100%);
+}
+
+@keyframes slide-in {
+	from {
+		transform: translateX(100%);
+		opacity: 0;
+	}
+	to {
+		transform: translateX(0);
+		opacity: 1;
+	}
+}
+
+.animate-slide-in {
+	animation: slide-in 0.35s ease-out;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+	display: none;
+}
+.hide-scrollbar {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
 }

@@ -1,10 +1,7 @@
-import PhotoLibrary from './PhotoLibrary';
+import { AppRouter } from './router';
+
 function App() {
-  return (
-      <PhotoLibrary />
-  )
+  return <AppRouter />;
 }
 
-
-
-export default App
+export default App;

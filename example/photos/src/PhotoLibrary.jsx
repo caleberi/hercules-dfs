@@ -1,11 +1,85 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Image, Folder, Trash2, Grid, List, Search, X, ChevronRight, Home, RefreshCw, Server, Download, AlertCircle, Video, Play, Pause, Volume2, VolumeX, Maximize, File } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Link } from '@tanstack/react-router';
+import {
+  Upload,
+  Image,
+  Folder,
+  Trash2,
+  Search,
+  X,
+  ChevronRight,
+  Home,
+  RefreshCw,
+  Server,
+  Download,
+  AlertCircle,
+  Video,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Maximize,
+  File,
+  FolderOpen,
+  Settings,
+  GraduationCap,
+  Star,
+  ChevronLeft,
+  ArrowRight,
+  Sparkles,
+  Copy,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { LearningStatsChart } from '@/components/LearningStatsChart';
+import { scanVaultTree, chartSeriesFromScan } from '@/lib/vaultScan';
 
 const API_BASE = 'http://localhost:8089/api/v1';
 const CHUNK_SIZE = 64 * 1024 * 1024; // 64MB per chunk (matching common.ChunkMaxSizeInByte)
 const APPEND_MAX = 16 * 1024 * 1024; // 16MB max for append
 const MAX_TEXT_PREVIEW_BYTES = 200 * 1024;
 const LEASE_EXPIRED_CODE = 8;
+
+function SegmentedProgress({ filled, segments = 12 }) {
+  const safe = Math.max(0, Math.min(segments, filled));
+  return (
+    <div className="flex gap-1">
+      {Array.from({ length: segments }).map((_, i) => (
+        <div
+          key={i}
+          className={cn(
+            'h-2 min-w-[6px] flex-1 rounded-[4px]',
+            i < safe ? 'bg-[#3B82F6]' : 'bg-white/10'
+          )}
+        />
+      ))}
+    </div>
+  );
+}
 
 // Utility functions for file type detection
 const isVideoFile = (filename) => {
@@ -41,7 +115,7 @@ const isCodeFile = (filename) => {
 };
 
 // Video Player Component
-const VideoPlayer = ({ src, srcKind, onClose, serverInfo }) => {
+const VideoPlayer = ({ src, srcKind, serverInfo }) => {
   const videoRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -277,12 +351,29 @@ export default function PhotoLibrary() {
   const [isVideo, setIsVideo] = useState(false);
   const [docPreviewType, setDocPreviewType] = useState('none');
   const [docPreviewText, setDocPreviewText] = useState('');
+  const [vaultScan, setVaultScan] = useState(null);
+  const [vaultScanLoading, setVaultScanLoading] = useState(false);
+  const [chartData, setChartData] = useState(() => chartSeriesFromScan(null));
+  const [replicaLease, setReplicaLease] = useState(null);
+  const [imageThumbs, setImageThumbs] = useState({});
+  /** Click Photos/Videos/Documents cards to filter the grid; null shows all. */
+  const [libraryCategoryFilter, setLibraryCategoryFilter] = useState(null);
 
   const isInitialMount = useRef(true);
+  const thumbInFlightRef = useRef(new Set());
 
   const showNotification = (message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const copyReplicaAddr = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotification('Address copied');
+    } catch {
+      showNotification('Could not copy', 'error');
+    }
   };
 
   /**
@@ -393,7 +484,7 @@ export default function PhotoLibrary() {
    * MUST use primary server for consistency
    * Primary coordinates write to all replicas
    */
-  const selectServerForWrite = (lease) => {
+  const _selectServerForWrite = (lease) => {
     if (!lease || !lease.primary) {
       console.warn('No primary server available in lease');
       return null;
@@ -426,6 +517,47 @@ export default function PhotoLibrary() {
     };
   };
 
+  const refreshVaultInsights = async () => {
+    setVaultScanLoading(true);
+    try {
+      const scan = await scanVaultTree(API_BASE, '/photos');
+      setVaultScan(scan);
+      setChartData(chartSeriesFromScan(scan));
+
+      if (scan.sampleFilePath) {
+        try {
+          const handle = await getChunkHandle(scan.sampleFilePath, 0);
+          const response = await fetch(
+            `${API_BASE}/chunk/servers?handle=${encodeURIComponent(handle)}`
+          );
+          const result = await response.json();
+          if (result.success && result.data) {
+            setReplicaLease({
+              primary: result.data.primary,
+              secondaries: result.data.secondaries || [],
+              handle: result.data.handle,
+              expire: result.data.expire,
+              samplePath: scan.sampleFilePath,
+            });
+          } else {
+            setReplicaLease(null);
+          }
+        } catch {
+          setReplicaLease(null);
+        }
+      } else {
+        setReplicaLease(null);
+      }
+    } catch (err) {
+      console.error('[VAULT SCAN]', err);
+      setVaultScan(null);
+      setChartData(chartSeriesFromScan(null));
+      setReplicaLease(null);
+    } finally {
+      setVaultScanLoading(false);
+    }
+  };
+
   /**
    * Load directory contents (photos and subdirectories)
    */
@@ -434,6 +566,7 @@ export default function PhotoLibrary() {
     if (photoCache[currentPath]) {
       setPhotos(photoCache[currentPath]);
       setLoading(false);
+      void refreshVaultInsights();
       return;
     }
 
@@ -466,6 +599,7 @@ export default function PhotoLibrary() {
       setPhotos([]);
     } finally {
       setLoading(false);
+      void refreshVaultInsights();
     }
   };
 
@@ -478,6 +612,79 @@ export default function PhotoLibrary() {
     loadPhotos();
   }, [currentPath]);
 
+  useEffect(() => {
+    setLibraryCategoryFilter(null);
+  }, [currentPath]);
+
+  useEffect(() => {
+    thumbInFlightRef.current = new Set();
+    setImageThumbs((prev) => {
+      Object.values(prev).forEach((u) => URL.revokeObjectURL(u));
+      return {};
+    });
+  }, [currentPath]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const q = searchQuery.toLowerCase();
+    let filtered = photos.filter((photo) =>
+      photo.name.toLowerCase().includes(q)
+    );
+    if (libraryCategoryFilter === 'image') {
+      filtered = filtered.filter((p) => p.isDir || isImageFile(p.name));
+    } else if (libraryCategoryFilter === 'video') {
+      filtered = filtered.filter((p) => p.isDir || isVideoFile(p.name));
+    } else if (libraryCategoryFilter === 'document') {
+      filtered = filtered.filter(
+        (p) =>
+          p.isDir ||
+          (!isImageFile(p.name) && !isVideoFile(p.name))
+      );
+    }
+    const targets = filtered
+      .filter((p) => !p.isDir && isImageFile(p.name))
+      .slice(0, 48);
+
+    (async () => {
+      for (const p of targets) {
+        if (cancelled) break;
+        if (thumbInFlightRef.current.has(p.path)) continue;
+        thumbInFlightRef.current.add(p.path);
+        try {
+          const fiRes = await fetch(
+            `${API_BASE}/fileinfo?path=${encodeURIComponent(p.path)}`
+          );
+          const fi = await fiRes.json();
+          if (!fi.success || cancelled) continue;
+          const len = fi.data.length;
+          const readLen = Math.min(Math.max(len, 1), 512 * 1024);
+          const rd = await fetch(
+            `${API_BASE}/read?path=${encodeURIComponent(p.path)}&offset=0&length=${readLen}`
+          );
+          if (!rd.ok || cancelled) continue;
+          const buf = await rd.arrayBuffer();
+          const blob = new Blob([buf], { type: 'image/*' });
+          const url = URL.createObjectURL(blob);
+          setImageThumbs((prev) => {
+            if (prev[p.path]) {
+              URL.revokeObjectURL(url);
+              return prev;
+            }
+            return { ...prev, [p.path]: url };
+          });
+        } catch {
+          /* skip thumbnail */
+        } finally {
+          thumbInFlightRef.current.delete(p.path);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [photos, searchQuery, viewMode, currentPath, libraryCategoryFilter]);
+
   const initializeLibrary = async () => {
     try {
       console.log('[INIT] Creating photos directory...');
@@ -489,7 +696,7 @@ export default function PhotoLibrary() {
       const result = await response.json();
       console.log('[INIT] Response:', result);
       console.log('✓ Initialized photos directory');
-    } catch (err) {
+    } catch {
       console.log('[INIT] Photos directory may already exist');
     }
     loadPhotos();
@@ -1176,348 +1383,851 @@ export default function PhotoLibrary() {
     );
   };
 
-  const filteredPhotos = photos.filter(photo =>
-    photo.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredPhotos = useMemo(
+    () =>
+      photos.filter((photo) =>
+        photo.name.toLowerCase().includes(searchQuery.toLowerCase())
+      ),
+    [photos, searchQuery]
   );
+
+  const libraryEntries = useMemo(() => {
+    if (!libraryCategoryFilter) return filteredPhotos;
+    return filteredPhotos.filter((p) => {
+      if (p.isDir) return true;
+      if (libraryCategoryFilter === 'image') return isImageFile(p.name);
+      if (libraryCategoryFilter === 'video') return isVideoFile(p.name);
+      return !isImageFile(p.name) && !isVideoFile(p.name);
+    });
+  }, [filteredPhotos, libraryCategoryFilter]);
 
   const breadcrumbs = currentPath.split('/').filter(p => p);
 
+  const filesOnly = filteredPhotos.filter((p) => !p.isDir);
+  const imageCount = filesOnly.filter((p) => isImageFile(p.name)).length;
+  const videoCount = filesOnly.filter((p) => isVideoFile(p.name)).length;
+  const docCount = filesOnly.filter(
+    (p) => !isImageFile(p.name) && !isVideoFile(p.name)
+  ).length;
+  const folderEntries = photos.filter((p) => p.isDir);
+  const GOAL = 30;
+  /** Capacity toward GOAL; ceil so 1 file still fills ≥1 segment. */
+  const CARD_SEGMENTS = 10;
+  const segTowardGoal = (n) => {
+    if (n <= 0) return 0;
+    return Math.min(
+      CARD_SEGMENTS,
+      Math.ceil((Math.min(n, GOAL) / GOAL) * CARD_SEGMENTS)
+    );
+  };
+  const pctTowardGoal = (n) =>
+    Math.min(100, Math.round((Math.min(n, GOAL) / GOAL) * 100));
+
+  const onUploadDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const fl = Array.from(e.dataTransfer?.files || []);
+    if (fl.length) handleUpload(fl);
+  };
+
   return (
-    <div className="min-h-screen app-shell">
-      {/* Header */}
-      <div className="border-b border-white/5 bg-slate-950/70 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-400 via-orange-500 to-teal-400 p-[2px]">
-                <div className="h-full w-full rounded-[10px] bg-slate-950 flex items-center justify-center">
-                  <Image className="w-6 h-6 text-amber-200" />
-                </div>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.35em] text-amber-200/70">Distributed vault</p>
-                <h1 className="text-3xl font-semibold text-white font-display">Hercules Vault</h1>
-                <p className="text-sm text-slate-300">Chunked storage for photos, videos, and files with replica awareness.</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={loadPhotos}
-                className="p-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/15 text-slate-100 transition-colors"
-                title="Refresh"
-              >
-                <RefreshCw className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
-                className="p-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/15 text-slate-100 transition-colors"
-                title="Toggle view"
-              >
-                {viewMode === 'grid' ? <List className="w-5 h-5" /> : <Grid className="w-5 h-5" />}
-              </button>
-              <button
-                onClick={handleCreateFolder}
-                className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/15 text-slate-100 transition-colors flex items-center gap-2"
-              >
-                <Folder className="w-5 h-5" />
-                <span>New Album</span>
-              </button>
-              <button
-                onClick={() => setShowUploadModal(true)}
-                className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-400 to-teal-400 hover:from-amber-300 hover:to-teal-300 text-slate-900 font-semibold transition-colors flex items-center gap-2"
-              >
-                <Upload className="w-5 h-5" />
-                <span>Upload</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Breadcrumbs */}
-          <div className="flex items-center space-x-2 text-sm mt-4">
-            <button
-              onClick={() => navigateToFolder('/photos')}
-              className="text-amber-200 hover:text-white transition-colors"
-            >
-              <Home className="w-4 h-4" />
-            </button>
-            {breadcrumbs.map((crumb, index) => (
-              <React.Fragment key={index}>
-                <ChevronRight className="w-4 h-4 text-slate-500" />
-                <button
-                  onClick={() => navigateToFolder('/' + breadcrumbs.slice(0, index + 1).join('/'))}
-                  className="text-amber-200 hover:text-white transition-colors"
-                >
-                  {crumb}
-                </button>
-              </React.Fragment>
-            ))}
-          </div>
-
-          {/* Search */}
-          <div className="mt-4 relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search files, albums, and media..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Notification */}
+    <div className="min-h-screen app-shell text-white">
       {notification && (
-        <div className={`fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 animate-slide-in ${
-          notification.type === 'success' 
-            ? 'bg-green-500' 
-            : notification.type === 'error'
-            ? 'bg-red-500'
-            : 'bg-blue-500'
-        } text-white`}>
+        <div
+          className={`fixed top-4 right-4 z-[60] rounded-xl px-5 py-3 text-sm shadow-xl animate-slide-in ${
+            notification.type === 'success'
+              ? 'bg-emerald-600'
+              : notification.type === 'error'
+                ? 'bg-red-600'
+                : 'bg-[#3B82F6]'
+          } text-white`}
+        >
           {notification.message}
         </div>
       )}
 
-      {/* Stream Progress */}
       {streamProgress && (
-        <div className="fixed top-20 right-4 bg-slate-900/80 p-4 rounded-lg shadow-lg z-50 border border-white/10 min-w-72">
-          <div className="flex items-center space-x-2 mb-2">
-            <Download className="w-4 h-4 text-teal-300 animate-bounce" />
-            <span className="text-white text-sm font-semibold">Streaming chunks from replicas...</span>
+        <div className="fixed top-20 right-4 z-[60] min-w-72 rounded-xl border border-white/10 bg-[#1D1F2B]/95 p-4 shadow-xl backdrop-blur-md">
+          <div className="mb-2 flex items-center gap-2">
+            <Download className="size-4 animate-bounce text-[#60A5FA]" />
+            <span className="text-sm font-semibold">
+              Streaming chunks from replicas...
+            </span>
           </div>
-          <div className="text-xs text-slate-400 mb-2">
+          <div className="mb-2 text-xs text-slate-400">
             Chunk {streamProgress.currentChunk} of {streamProgress.totalChunks}
           </div>
-          <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden mb-2">
-            <div
-              className="h-full bg-gradient-to-r from-amber-400 to-teal-400 transition-all duration-300"
-              style={{ width: `${streamProgress.total > 0 ? (streamProgress.loaded / streamProgress.total) * 100 : 0}%` }}
-            ></div>
-          </div>
-          <div className="text-xs text-slate-400 text-right">
-            {(streamProgress.loaded / 1024).toFixed(1)} KB / {(streamProgress.total / 1024).toFixed(1)} KB
+          <Progress
+            value={
+              streamProgress.total > 0
+                ? (streamProgress.loaded / streamProgress.total) * 100
+                : 0
+            }
+          />
+          <div className="mt-2 text-right text-xs text-slate-400">
+            {(streamProgress.loaded / 1024).toFixed(1)} KB /{' '}
+            {(streamProgress.total / 1024).toFixed(1)} KB
           </div>
         </div>
       )}
 
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="flex flex-col items-center space-y-3">
-              <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
-              <p className="text-slate-400 text-sm">Loading from distributed file system...</p>
-            </div>
+      <div className="flex min-h-screen">
+        <aside className="flex w-[72px] shrink-0 flex-col items-center border-r border-white/[0.06] bg-[#161824]/90 py-6 backdrop-blur-md">
+          <div className="mb-8 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#3B82F6] via-[#EC4899] to-orange-400 shadow-lg shadow-[#3B82F6]/20">
+            <GraduationCap className="size-5 text-white" />
           </div>
-        ) : filteredPhotos.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-            <Image className="w-16 h-16 mb-4 opacity-50" />
-            <p className="text-lg">No files yet</p>
-            <p className="text-sm">Upload your first file, photo, or video to get started</p>
-          </div>
-        ) : (
-          <div className={viewMode === 'grid'
-            ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4'
-            : 'space-y-2'
-          }>
-            {currentPath !== '/photos' && (
-              <button
-                onClick={navigateUp}
-                className="p-4 bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex items-center space-x-3 text-white"
-              >
-                <Folder className="w-6 h-6 text-gray-400" />
-                <span>..</span>
-              </button>
-            )}
+          <nav className="flex flex-1 flex-col items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-xl bg-[#3B82F6]/20 text-[#93C5FD] ring-1 ring-[#3B82F6]/30"
+                  asChild
+                >
+                  <Link to="/">
+                    <FolderOpen className="size-5" />
+                  </Link>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Media library</TooltipContent>
+            </Tooltip>
+            <div className="flex-1" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-xl text-slate-400 hover:bg-white/10 hover:text-white"
+                  asChild
+                >
+                  <Link to="/settings">
+                    <Settings className="size-5" />
+                  </Link>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Settings</TooltipContent>
+            </Tooltip>
+          </nav>
+          <Avatar className="mt-4 ring-2 ring-orange-400/40">
+            <AvatarFallback className="bg-[#252836] text-xs font-semibold">
+              HV
+            </AvatarFallback>
+          </Avatar>
+        </aside>
 
-            {filteredPhotos.map((photo, index) => (
-              <div
-                key={index}
-                className={`relative group ${
-                  viewMode === 'grid' ? 'aspect-square' : 'flex items-center space-x-3 p-3'
-                } bg-white/5 hover:bg-white/15 rounded-lg border border-white/5 transition-all cursor-pointer ${
-                  selectedPhotos.includes(photo.path) ? 'ring-2 ring-amber-300/80' : ''
-                }`}
-                onClick={() => photo.isDir ? navigateToFolder(photo.path) : togglePhotoSelection(photo)}
-              >
-                {viewMode === 'grid' ? (
-                  <>
-                    <div className="w-full h-full flex items-center justify-center">
-                      {photo.isDir ? (
-                        <Folder className="w-16 h-16 text-amber-300" />
-                      ) : isVideoFile(photo.name) ? (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                          className="w-full h-full flex items-center justify-center hover:scale-110 transition-transform"
-                        >
-                          <Video className="w-16 h-16 text-teal-300" />
-                        </button>
-                      ) : isImageFile(photo.name) ? (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                          className="w-full h-full flex items-center justify-center hover:scale-110 transition-transform"
-                        >
-                          <Image className="w-16 h-16 text-amber-300" />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                          className="w-full h-full flex items-center justify-center hover:scale-110 transition-transform"
-                        >
-                          <File className="w-16 h-16 text-cyan-300" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/80 to-transparent">
-                      <p className="text-white text-sm truncate">{photo.name}</p>
-                    </div>
-                    {photo.isDir && photo.path !== '/photos' ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteFolder(photo.path);
-                        }}
-                        className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete folder"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    ) : !photo.isDir && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(photo.path);
-                        }}
-                        className="absolute top-2 right-2 p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {photo.isDir ? (
-                      <Folder className="w-8 h-8 text-amber-300 flex-shrink-0" />
-                    ) : isVideoFile(photo.name) ? (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                        className="flex items-center space-x-3"
-                      >
-                        <Video className="w-8 h-8 text-teal-300 flex-shrink-0" />
-                      </button>
-                    ) : isImageFile(photo.name) ? (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                        className="flex items-center space-x-3"
-                      >
-                        <Image className="w-8 h-8 text-amber-300 flex-shrink-0" />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); readMedia(photo.path); }}
-                        className="flex items-center space-x-3"
-                      >
-                        <File className="w-8 h-8 text-cyan-300 flex-shrink-0" />
-                      </button>
-                    )}
-                    <span className="text-white flex-1 truncate">{photo.name}</span>
-                    {photo.isDir && photo.path !== '/photos' ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteFolder(photo.path);
-                        }}
-                        className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete folder"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    ) : !photo.isDir && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(photo.path);
-                        }}
-                        className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </>
+        <div className="hidden w-[200px] shrink-0 flex-col border-r border-white/[0.06] bg-[#141622]/95 py-8 pl-4 pr-3 backdrop-blur-md lg:flex xl:w-[220px]">
+          <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.28em] text-slate-500">
+            Albums
+          </p>
+          <div className="flex max-h-[calc(100vh-8rem)] flex-col gap-1 overflow-y-auto pr-1">
+            <button
+              type="button"
+              onClick={() => navigateToFolder('/photos')}
+              className={cn(
+                'flex items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors',
+                currentPath === '/photos'
+                  ? 'bg-[#3B82F6]/15 text-white'
+                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+              )}
+            >
+              <span className="truncate">Photos</span>
+              {currentPath === '/photos' && (
+                <ChevronRight className="size-4 shrink-0 text-[#3B82F6]" />
+              )}
+            </button>
+            {folderEntries.map((folder) => (
+              <button
+                key={folder.path}
+                type="button"
+                onClick={() => navigateToFolder(folder.path)}
+                className={cn(
+                  'flex items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors',
+                  currentPath === folder.path
+                    ? 'bg-[#3B82F6]/15 text-white'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
                 )}
-              </div>
+              >
+                <span className="truncate">{folder.name}</span>
+                {currentPath === folder.path && (
+                  <ChevronRight className="size-4 shrink-0 text-[#3B82F6]" />
+                )}
+              </button>
             ))}
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Upload Modal */}
-      {showUploadModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full shadow-2xl border border-white/10">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-white">Upload Files</h3>
+        <div className="flex min-w-0 flex-1 flex-col lg:flex-row">
+          <main className="min-w-0 flex-1 px-4 pb-10 pt-6 md:px-8">
+            <header className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+              <div>
+                <h2 className="text-2xl font-bold tracking-tight md:text-3xl">
+                  Hello!
+                </h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  You&apos;re making great progress—vault replication is ready.
+                </p>
+              </div>
+              <div className="flex flex-1 flex-wrap items-center gap-3 xl:max-w-xl xl:flex-initial xl:justify-end">
+                <div className="relative min-w-[200px] flex-1 xl:flex-initial xl:min-w-[320px]">
+                  <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
+                  <Input
+                    className="rounded-full border-white/10 bg-[#1D1F2B]/90 pl-11 text-sm uppercase tracking-wide placeholder:normal-case placeholder:tracking-normal"
+                    placeholder="Search by keywords or courses"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  className="rounded-full px-6 font-bold uppercase tracking-wide"
+                  onClick={() => setShowUploadModal(true)}
+                >
+                  Upload now
+                </Button>
+              </div>
+            </header>
+
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <button
-                onClick={() => !uploadProgress && setShowUploadModal(false)}
-                className="p-1 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-                disabled={!!uploadProgress}
+                type="button"
+                onClick={() => navigateToFolder('/photos')}
+                className="flex items-center gap-1 text-[#93C5FD] hover:text-white"
               >
-                <X className="w-6 h-6 text-gray-400" />
+                <Home className="size-3.5" />
               </button>
+              {breadcrumbs.map((crumb, index) => (
+                <React.Fragment key={index}>
+                  <ChevronRight className="size-3.5 text-slate-600" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigateToFolder('/' + breadcrumbs.slice(0, index + 1).join('/'))
+                    }
+                    className="truncate text-[#93C5FD] hover:text-white"
+                  >
+                    {crumb}
+                  </button>
+                </React.Fragment>
+              ))}
             </div>
 
-            {uploadProgress ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-300">Uploading to replicas...</span>
-                  <span className="text-amber-200 font-mono">{uploadProgress.current} / {uploadProgress.total}</span>
-                </div>
-                <div className="text-xs text-gray-400 truncate">
-                  Current: {uploadProgress.currentFile}
-                </div>
-                <div className="w-full bg-gray-700 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-amber-400 to-teal-400 transition-all duration-300"
-                    style={{
-                      width: `${uploadProgress.totalBytes > 0
-                        ? (uploadProgress.bytesUploaded / uploadProgress.totalBytes) * 100
-                        : (uploadProgress.current / uploadProgress.total) * 100}%`
-                    }}
-                  ></div>
-                </div>
-                <div className="text-xs text-gray-400 text-right">
-                  {(uploadProgress.bytesUploaded / 1024 / 1024).toFixed(2)} MB / {(uploadProgress.totalBytes / 1024 / 1024).toFixed(2)} MB
-                </div>
-                <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                  <div className="flex items-start space-x-2">
-                    <AlertCircle className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-                    <p className="text-xs text-blue-300">
-                      Files are being replicated across multiple chunk servers for redundancy and fault tolerance.
-                    </p>
-                  </div>
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold tracking-tight md:text-2xl">
+                  Media library
+                </h1>
+                <div className="flex gap-1">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-9 rounded-full border-white/10"
+                    type="button"
+                    onClick={() =>
+                      setViewMode((m) => (m === 'grid' ? 'list' : 'grid'))
+                    }
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-9 rounded-full border-white/10"
+                    type="button"
+                    onClick={() =>
+                      setViewMode((m) => (m === 'grid' ? 'list' : 'grid'))
+                    }
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
                 </div>
               </div>
-            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" type="button" onClick={loadPhotos}>
+                  <RefreshCw className="size-4" />
+                  Refresh
+                </Button>
+                <Button variant="outline" type="button" onClick={handleCreateFolder}>
+                  <Folder className="size-4" />
+                  New album
+                </Button>
+                <Button variant="outline" type="button" onClick={() => setShowUploadModal(true)}>
+                  <Upload className="size-4" />
+                  Upload
+                </Button>
+              </div>
+            </div>
+
+            <div className="hide-scrollbar mb-8 flex gap-4 overflow-x-auto pb-2">
+              {[
+                {
+                  title: 'Photos',
+                  subtitle: 'Images & renders',
+                  Icon: Image,
+                  count: imageCount,
+                  filterKey: 'image',
+                  tint: 'from-[#F97316]/30 to-[#EC4899]/20',
+                  star: true,
+                },
+                {
+                  title: 'Videos',
+                  subtitle: 'Streams & clips',
+                  Icon: Video,
+                  count: videoCount,
+                  filterKey: 'video',
+                  tint: 'from-[#3B82F6]/35 to-cyan-500/15',
+                  star: false,
+                },
+                {
+                  title: 'Documents',
+                  subtitle: 'PDFs & files',
+                  Icon: File,
+                  count: docCount,
+                  filterKey: 'document',
+                  tint: 'from-violet-500/25 to-[#3B82F6]/10',
+                  star: false,
+                },
+              ].map((item) => {
+                const selected = libraryCategoryFilter === item.filterKey;
+                return (
+                <Card
+                  key={item.title}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() =>
+                    setLibraryCategoryFilter((prev) =>
+                      prev === item.filterKey ? null : item.filterKey
+                    )
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setLibraryCategoryFilter((prev) =>
+                        prev === item.filterKey ? null : item.filterKey
+                      );
+                    }
+                  }}
+                  className={cn(
+                    'min-w-[260px] flex-1 cursor-pointer border-white/[0.07] transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-[#3B82F6]/60',
+                    item.star && !selected && 'ring-1 ring-[#FBBF24]/35',
+                    selected && 'ring-2 ring-[#3B82F6]',
+                    'hover:border-[#3B82F6]/35'
+                  )}
+                  title={
+                    selected
+                      ? 'Click to show all file types'
+                      : `Show only ${item.title.toLowerCase()} in this folder`
+                  }
+                >
+                  <CardHeader className="relative pb-2">
+                    {item.star && (
+                      <Star className="absolute right-5 top-5 size-4 fill-[#FBBF24] text-[#FBBF24]" />
+                    )}
+                    <div
+                      className={cn(
+                        'mb-4 flex h-28 items-center justify-center rounded-2xl bg-gradient-to-br',
+                        item.tint
+                      )}
+                    >
+                      <item.Icon className="size-14 text-white/90 drop-shadow-lg" />
+                    </div>
+                    <CardTitle>{item.title}</CardTitle>
+                    <CardDescription>{item.subtitle}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      <span>
+                        Progress {Math.min(item.count, GOAL)}/{GOAL}
+                      </span>
+                      <span className="text-[#93C5FD]">{pctTowardGoal(item.count)}%</span>
+                    </div>
+                    <SegmentedProgress
+                      filled={segTowardGoal(item.count)}
+                      segments={CARD_SEGMENTS}
+                    />
+                  </CardContent>
+                </Card>
+              );
+              })}
+            </div>
+
+            <Card className="border-white/[0.07]">
+              <CardHeader className="flex-row items-center justify-between pb-2">
+                <div>
+                  <CardTitle className="text-base">Vault inventory</CardTitle>
+                  <CardDescription>
+                    Open previews stream from chunk replicas; uploads accept any file type.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">Live</Badge>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {loading ? (
+                  <div className="flex h-48 flex-col items-center justify-center gap-3">
+                    <div className="size-10 animate-spin rounded-full border-2 border-[#3B82F6] border-t-transparent" />
+                    <p className="text-sm text-slate-400">Loading from filesystem...</p>
+                  </div>
+                ) : libraryEntries.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center text-slate-400">
+                    <Image className="mb-4 size-14 opacity-40" />
+                    <p className="text-lg font-medium text-slate-300">Nothing here yet</p>
+                    <p className="mt-1 max-w-sm text-sm">
+                      {libraryCategoryFilter
+                        ? 'Nothing matches this filter in the current folder. Clear the card filter or pick another album.'
+                        : 'Upload documents, video, images—large files use 64MB chunks with a 16MB tail append.'}
+                    </p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                      {libraryCategoryFilter && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="uppercase tracking-wide"
+                          onClick={() => setLibraryCategoryFilter(null)}
+                        >
+                          Clear filter
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        className="uppercase tracking-wide"
+                        onClick={() => setShowUploadModal(true)}
+                      >
+                        Upload assets
+                      </Button>
+                    </div>
+                  </div>
+                ) : viewMode === 'list' ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/[0.06] hover:bg-transparent">
+                        <TableHead>Course name</TableHead>
+                        <TableHead>Progress</TableHead>
+                        <TableHead className="text-right">Storage</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentPath !== '/photos' && (
+                        <TableRow>
+                          <TableCell colSpan={3}>
+                            <button
+                              type="button"
+                              onClick={navigateUp}
+                              className="flex items-center gap-2 text-[#93C5FD] hover:text-white"
+                            >
+                              <Folder className="size-4" />
+                              <span>Parent folder</span>
+                            </button>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {libraryEntries.map((photo, index) => (
+                        <TableRow key={index}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#252836]">
+                                {photo.isDir ? (
+                                  <Folder className="size-5 text-orange-300" />
+                                ) : isVideoFile(photo.name) ? (
+                                  <Video className="size-5 text-cyan-300" />
+                                ) : isImageFile(photo.name) && imageThumbs[photo.path] ? (
+                                  <img
+                                    src={imageThumbs[photo.path]}
+                                    alt=""
+                                    className="size-full object-cover"
+                                  />
+                                ) : isImageFile(photo.name) ? (
+                                  <Image className="size-5 text-orange-200" />
+                                ) : (
+                                  <File className="size-5 text-[#93C5FD]" />
+                                )}
+                              </div>
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    photo.isDir
+                                      ? navigateToFolder(photo.path)
+                                      : readMedia(photo.path)
+                                  }
+                                  className="text-left font-medium text-white hover:text-[#93C5FD]"
+                                >
+                                  {photo.name}
+                                </button>
+                                <p className="text-xs text-slate-500">
+                                  {photo.isDir ? 'Album' : 'Replica-aware media'}
+                                </p>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {photo.isDir ? (
+                              <Badge variant="outline">Folder</Badge>
+                            ) : selectedPhotos.includes(photo.path) ? (
+                              <Badge>Selected</Badge>
+                            ) : (
+                              <Badge variant="accent">Ready</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <span className="text-sm font-medium text-[#93C5FD]">
+                              Hercules DFS
+                            </span>
+                            <div className="mt-2 flex justify-end gap-2">
+                              {!photo.isDir && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 rounded-lg"
+                                  type="button"
+                                  onClick={() => readMedia(photo.path)}
+                                >
+                                  Open
+                                </Button>
+                              )}
+                              {!photo.isDir && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                                  type="button"
+                                  onClick={() => handleDelete(photo.path)}
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
+                              )}
+                              {photo.isDir && photo.path !== '/photos' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 text-red-400 hover:bg-red-500/10"
+                                  type="button"
+                                  onClick={() => handleDeleteFolder(photo.path)}
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+                    {currentPath !== '/photos' && (
+                      <button
+                        type="button"
+                        onClick={navigateUp}
+                        className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] transition-colors hover:bg-white/[0.08]"
+                      >
+                        <Folder className="size-10 text-slate-400" />
+                        <span className="text-sm text-slate-300">..</span>
+                      </button>
+                    )}
+                    {libraryEntries.map((photo, index) => (
+                      <div
+                        key={index}
+                        role="presentation"
+                        className={cn(
+                          'group relative aspect-square cursor-pointer overflow-hidden rounded-2xl border border-white/[0.06] bg-[#1D1F2B]/80 transition-all hover:border-[#3B82F6]/30',
+                          selectedPhotos.includes(photo.path) &&
+                            'ring-2 ring-[#3B82F6]/60'
+                        )}
+                        onClick={() =>
+                          photo.isDir ? navigateToFolder(photo.path) : togglePhotoSelection(photo)
+                        }
+                      >
+                        <div className="flex h-full w-full items-center justify-center">
+                          {photo.isDir ? (
+                            <Folder className="size-16 text-orange-300" />
+                          ) : isVideoFile(photo.name) ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                readMedia(photo.path);
+                              }}
+                              className="flex size-full items-center justify-center hover:scale-105"
+                            >
+                              <Video className="size-16 text-cyan-300" />
+                            </button>
+                          ) : isImageFile(photo.name) ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                readMedia(photo.path);
+                              }}
+                              className="relative flex size-full items-center justify-center hover:scale-[1.02]"
+                            >
+                              {imageThumbs[photo.path] ? (
+                                <img
+                                  src={imageThumbs[photo.path]}
+                                  alt=""
+                                  className="size-full object-cover"
+                                />
+                              ) : (
+                                <Image className="size-16 text-orange-200 opacity-60" />
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                readMedia(photo.path);
+                              }}
+                              className="flex size-full items-center justify-center hover:scale-105"
+                            >
+                              <File className="size-16 text-[#93C5FD]" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent p-3">
+                          <p className="truncate text-sm font-medium">{photo.name}</p>
+                        </div>
+                        {photo.isDir && photo.path !== '/photos' ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFolder(photo.path);
+                            }}
+                            className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+                          >
+                            <Trash2 className="size-4 text-white" />
+                          </button>
+                        ) : (
+                          !photo.isDir && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(photo.path);
+                              }}
+                              className="absolute right-2 top-2 rounded-lg bg-red-600/90 p-2 opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+                            >
+                              <Trash2 className="size-4 text-white" />
+                            </button>
+                          )
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </main>
+
+          <aside className="w-full shrink-0 border-t border-white/[0.06] bg-[#12141D]/50 p-5 lg:w-[300px] lg:border-l lg:border-t-0 xl:w-[320px]">
+            <Card className="border-white/[0.07] bg-[#1D1F2B]/80">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Vault stats</CardTitle>
+                <CardDescription className="text-xs text-slate-500">
+                  Recursive{' '}
+                  <span className="font-mono text-slate-400">GET /api/v1/list</span> under{' '}
+                  <span className="font-mono text-slate-400">/photos</span>
+                  {vaultScan != null && (
+                    <span className="mt-1 block text-slate-400">
+                      {vaultScan.totalFiles} files · {vaultScan.totalFolders} folders ·{' '}
+                      {(vaultScan.totalBytes / (1024 * 1024)).toFixed(1)} MB
+                    </span>
+                  )}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <LearningStatsChart data={chartData} loading={vaultScanLoading} />
+              </CardContent>
+            </Card>
+
+            <Card className="mt-4 border-white/[0.07] bg-[#1D1F2B]/80">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Chunk replicas</CardTitle>
+                <CardDescription className="text-xs text-slate-500">
+                  Lease from first vault file (
+                  <span className="font-mono text-[10px] text-slate-400">
+                    GET /chunk/handle · /chunk/servers
+                  </span>
+                  ). Click an address to copy.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-2 pt-0">
+                {!replicaLease && (
+                  <p className="text-xs text-slate-500">
+                    No files under /photos yet—upload something to resolve chunkservers.
+                  </p>
+                )}
+                {replicaLease?.primary != null && replicaLease.primary !== '' && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-auto flex-col items-start gap-1 border-white/10 px-3 py-2 text-left font-mono text-[11px] text-[#93C5FD] hover:bg-white/10"
+                        onClick={() => copyReplicaAddr(String(replicaLease.primary))}
+                      >
+                        <span className="font-sans text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                          Primary
+                        </span>
+                        <span className="line-clamp-2 break-all text-white">
+                          {String(replicaLease.primary)}
+                        </span>
+                        <span className="flex items-center gap-1 font-sans text-[10px] text-slate-500">
+                          <Copy className="size-3" /> Copy
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Copy primary address</TooltipContent>
+                  </Tooltip>
+                )}
+                {(replicaLease?.secondaries || []).map((sec, i) => (
+                  <Tooltip key={`${sec}-${i}`}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-auto flex-col items-start gap-1 px-3 py-2 text-left font-mono text-[11px] text-slate-300 hover:bg-white/10"
+                        onClick={() => copyReplicaAddr(String(sec))}
+                      >
+                        <span className="font-sans text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          Secondary {i + 1}
+                        </span>
+                        <span className="line-clamp-2 break-all">{String(sec)}</span>
+                        <span className="flex items-center gap-1 font-sans text-[10px] text-slate-500">
+                          <Copy className="size-3" /> Copy
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Copy replica address</TooltipContent>
+                  </Tooltip>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="relative mt-4 overflow-hidden border-white/[0.07] bg-gradient-to-br from-[#1D1F2B] to-[#141622]">
+              <div className="absolute right-4 top-4 opacity-10">
+                <Sparkles className="size-24 text-[#3B82F6]" />
+              </div>
+              <CardHeader className="relative flex-row items-center justify-between">
+                <CardTitle className="max-w-[85%] text-base leading-snug">
+                  Chunked uploads—keep originals safe across replicas
+                </CardTitle>
+                <button type="button" className="text-[10px] font-bold uppercase tracking-wider text-[#93C5FD] hover:text-white">
+                  Popular
+                </button>
+              </CardHeader>
+              <CardContent className="relative space-y-4">
+                <div className="flex gap-2">
+                  <Badge variant="outline">Vault</Badge>
+                  <Badge variant="accent">DFS</Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
+                  <span className="flex items-center gap-1">
+                    <FolderOpen className="size-3.5" /> Multi-part
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Upload className="size-3.5" /> Any MIME
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  className="w-full rounded-xl uppercase tracking-wide"
+                  onClick={() => setShowUploadModal(true)}
+                >
+                  Upload files
+                  <ArrowRight className="size-4" />
+                </Button>
+              </CardContent>
+            </Card>
+          </aside>
+        </div>
+      </div>
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <Card className="w-full max-w-md border-white/10 shadow-2xl">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
               <div>
-                <label className="block w-full p-8 border-2 border-dashed border-white/20 rounded-lg text-center cursor-pointer hover:border-teal-300 transition-colors">
-                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                  <p className="text-white mb-1">Click to upload files, photos, or videos</p>
-                  <p className="text-sm text-gray-400">or drag and drop</p>
-                  <p className="text-xs text-gray-500 mt-2">Large files are split into 64MB chunks; tails use 16MB append</p>
+                <CardTitle>Upload assets</CardTitle>
+                <CardDescription>
+                  Documents, video, images, archives—same chunked pipeline as before.
+                </CardDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 rounded-full"
+                disabled={!!uploadProgress}
+                onClick={() => !uploadProgress && setShowUploadModal(false)}
+              >
+                <X className="size-5 text-slate-400" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {uploadProgress ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-300">Uploading to replicas...</span>
+                    <span className="font-mono text-[#93C5FD]">
+                      {uploadProgress.current} / {uploadProgress.total}
+                    </span>
+                  </div>
+                  <div className="truncate text-xs text-slate-500">
+                    Current: {uploadProgress.currentFile}
+                  </div>
+                  <Progress
+                    value={
+                      uploadProgress.totalBytes > 0
+                        ? (uploadProgress.bytesUploaded / uploadProgress.totalBytes) * 100
+                        : (uploadProgress.current / uploadProgress.total) * 100
+                    }
+                  />
+                  <div className="text-right text-xs text-slate-500">
+                    {(uploadProgress.bytesUploaded / 1024 / 1024).toFixed(2)} MB /{' '}
+                    {(uploadProgress.totalBytes / 1024 / 1024).toFixed(2)} MB
+                  </div>
+                  <div className="rounded-xl border border-[#3B82F6]/25 bg-[#3B82F6]/10 p-3">
+                    <div className="flex gap-2">
+                      <AlertCircle className="mt-0.5 size-4 shrink-0 text-[#93C5FD]" />
+                      <p className="text-xs text-slate-300">
+                        Files replicate across chunkservers for redundancy and fault tolerance.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <label
+                  className="block cursor-pointer rounded-2xl border-2 border-dashed border-white/15 bg-[#141622]/60 p-10 text-center transition-colors hover:border-[#3B82F6]/50"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={onUploadDrop}
+                >
+                  <Upload className="mx-auto mb-3 size-12 text-slate-500" />
+                  <p className="mb-1 font-medium text-white">
+                    Drop files here or click to browse
+                  </p>
+                  <p className="text-sm text-slate-400">
+                    PDF, Office, video, images, code—accepts all MIME types (
+                    <span className="font-mono text-xs">*/*</span>)
+                  </p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Large files: 64MB writes + ≤16MB append tail
+                  </p>
                   <input
                     type="file"
                     multiple
                     accept="*/*"
-                    onChange={(e) => handleUpload(Array.from(e.target.files))}
+                    onChange={(e) =>
+                      handleUpload(Array.from(e.target.files || []))
+                    }
                     className="hidden"
                   />
                 </label>
-              </div>
-            )}
-          </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -1551,7 +2261,7 @@ export default function PhotoLibrary() {
             </div>
             
             {isVideo ? (
-              <VideoPlayer src={mediaSrc} srcKind={mediaSrcKind} onClose={() => setShowMediaModal(false)} serverInfo={serverInfo} />
+              <VideoPlayer src={mediaSrc} srcKind={mediaSrcKind} serverInfo={serverInfo} />
             ) : (
               <>
                 <div className="flex items-center justify-center bg-black/50 rounded-lg p-4 mb-4">
