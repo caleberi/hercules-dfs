@@ -124,6 +124,7 @@ func populateServers(t *testing.T, masterAddress common.ServerAddr) []common.Chu
 }
 
 func TestRPCHandler(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
 	dirPath := t.TempDir()
 	master := setupMasterServer(t, context.Background(), dirPath, "127.0.0.1:9090")
 	slaves := []*ChunkServer{}
@@ -198,16 +199,19 @@ func TestRPCHandler(t *testing.T) {
 					name              string
 					shouldBumpVersion bool
 					handle            common.ChunkHandle
+					versionArg        common.ChunkVersion
 				}{
 					{
-						name:              "NoVersionBump",
+						name:              "MismatchedVersionStale",
 						shouldBumpVersion: false,
 						handle:            handles[rand.Intn(len(handles))],
+						versionArg:        common.ChunkVersion(999999999),
 					},
 				}
 				for _, subTestcase := range subTestcases {
 					args := rpc_struct.CheckChunkVersionArgs{
-						Handle: subTestcase.handle,
+						Handle:  subTestcase.handle,
+						Version: subTestcase.versionArg,
 					}
 					t.Run(t.Name()+"_"+subTestcase.name, func(t *testing.T) {
 						err := shared.UnicastToRPCServer(

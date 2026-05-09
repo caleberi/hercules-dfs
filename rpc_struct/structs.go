@@ -53,18 +53,19 @@ type SysReportInfoArgs struct{}
 
 // SysReportInfoReply returns a chunkserver's inventory and basic memory stats.
 type SysReportInfoReply struct {
-	SysMem common.Memory
 	Chunks []common.PersistedChunkInfo
+	SysMem common.Memory
 }
 
-// CheckChunkVersionArgs asks a primary to validate whether a replica's version
-// for a chunk handle is stale.
+// CheckChunkVersionArgs carries the master's authoritative chunk Version for handle.
+// The callee compares its local version: equal is OK; exactly one less triggers catch-up; else stale.
 type CheckChunkVersionArgs struct {
 	Handle  common.ChunkHandle
 	Version common.ChunkVersion
 }
 
-// CheckChunkVersionReply indicates whether the queried replica is stale.
+// CheckChunkVersionReply: Stale means the replica does not match authoritative Version for quorum;
+// implementations should avoid destructive local actions solely on this signal.
 type CheckChunkVersionReply struct {
 	Stale bool
 }
@@ -72,12 +73,12 @@ type CheckChunkVersionReply struct {
 // ReadChunkArgs requests a read from a chunk at Offset for Length bytes.
 // Data may be provided as a preallocated buffer; implementations may ignore it.
 type ReadChunkArgs struct {
+	// Lease is optional and may be used to require "read-from-primary" semantics.
+	Lease  *common.Lease
+	Data   []byte
 	Handle common.ChunkHandle
 	Offset common.Offset
 	Length int64
-	Data   []byte
-	// Lease is optional and may be used to require "read-from-primary" semantics.
-	Lease *common.Lease
 }
 
 // ReadChunkReply returns the read payload (possibly shorter than requested) and
@@ -101,9 +102,9 @@ type CreateChunkReply struct {
 // ForwardDataArgs is the first phase of write/append: stage Data into the
 // server's download buffer and (optionally) forward it along a replica chain.
 type ForwardDataArgs struct {
-	DownloadBufferId common.BufferId
 	Data             []byte
 	Replicas         []common.ServerAddr
+	DownloadBufferId common.BufferId
 }
 
 // ForwardDataReply indicates whether staging/forwarding succeeded.
@@ -114,9 +115,9 @@ type ForwardDataReply struct {
 // WriteChunkArgs commits previously forwarded data (DownloadBufferId) into a
 // chunk at Offset and replicates the mutation to Replicas.
 type WriteChunkArgs struct {
+	Replicas         []common.ServerAddr
 	DownloadBufferId common.BufferId
 	Offset           common.Offset
-	Replicas         []common.ServerAddr
 }
 
 // WriteChunkReply returns the number of bytes written and an application-level
@@ -143,8 +144,8 @@ type ApplyMutationReply struct {
 // AppendChunkArgs commits previously forwarded data (DownloadBufferId) as an
 // atomic append and replicates it to Replicas.
 type AppendChunkArgs struct {
-	DownloadBufferId common.BufferId
 	Replicas         []common.ServerAddr
+	DownloadBufferId common.BufferId
 }
 
 // AppendChunkReply returns the offset at which the append occurred and an
@@ -157,8 +158,8 @@ type AppendChunkReply struct {
 // GetSnapshotArgs requests that a chunkserver send a snapshot (full chunk
 // contents) to Replicas (a single target address).
 type GetSnapshotArgs struct {
-	Handle   common.ChunkHandle
 	Replicas common.ServerAddr
+	Handle   common.ChunkHandle
 }
 
 // GetSnapshotReply indicates whether snapshot transmission succeeded.

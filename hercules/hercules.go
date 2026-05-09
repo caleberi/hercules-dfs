@@ -60,7 +60,7 @@ func NewHerculesClient(ctx context.Context, address common.ServerAddr, cleanup t
 //   - d: The duration between cleanup operations.
 func (hercules *HerculesClient) cleanLease(d time.Duration) {
 	cleanup := func(handle common.ChunkHandle, lease *common.Lease) {
-		if lease.IsExpired(time.Now().Add(common.LeaseTimeout)) {
+		if lease.IsExpired(time.Now()) {
 			delete(hercules.cache, lease.Handle)
 		}
 	}

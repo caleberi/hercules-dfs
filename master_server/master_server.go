@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,6 +41,7 @@ type chunkInfo struct {
 	checksum  common.Checksum
 	path      common.Path
 	locations []common.ServerAddr
+	length    common.Offset
 	version   common.ChunkVersion
 	sync.RWMutex
 }
@@ -274,6 +276,11 @@ func (ma *MasterServer) serverHeartBeat() error {
 	common.ForEachInSlice(handles, func(handle common.ChunkHandle) {
 		if ck, ok := ma.chunkServerManager.getChunk(handle); ok {
 			log.Info().Msgf("Replication in progress >>> for handle [%v] chunk [%v]", handle, ck)
+			if !ma.chunkServerManager.TryStartReplication(handle) {
+				log.Info().Msgf("Replication already in progress for handle [%v]; skipping duplicate attempt", handle)
+				return
+			}
+			defer ma.chunkServerManager.FinishReplication(handle)
 			err := ma.performReplication(handle)
 			if err != nil {
 				log.Err(err).Stack().Msg(err.Error())
@@ -307,7 +314,33 @@ func (ma *MasterServer) performReplication(handle common.ChunkHandle) error {
 		return err
 	}
 
-	// CONTINUE FROM HERE  LATER
+	// Capture authoritative source metadata for verification.
+	var fromSys rpc_struct.SysReportInfoReply
+	if err := shared.UnicastToRPCServer(
+		string(from), rpc_struct.CRPCSysReportHandler,
+		rpc_struct.SysReportInfoArgs{}, &fromSys, shared.DefaultRetryConfig,
+	); err != nil {
+		// Some tests/mocks don't implement SysReport. Treat verification as best-effort.
+		if !strings.Contains(err.Error(), "can't find method") {
+			ma.chunkServerManager.addGarbage(to, handle)
+			return err
+		}
+		log.Warn().Msgf("SysReport unavailable on %v; skipping replication verification for handle %v", from, handle)
+	}
+	var src *common.PersistedChunkInfo
+	if len(fromSys.Chunks) > 0 {
+		for i := range fromSys.Chunks {
+			if fromSys.Chunks[i].Handle == handle {
+				src = &fromSys.Chunks[i]
+				break
+			}
+		}
+		if src == nil {
+			ma.chunkServerManager.addGarbage(to, handle)
+			return fmt.Errorf("source %v does not report handle %v in sysreport", from, handle)
+		}
+	}
+
 	var sr rpc_struct.GetSnapshotReply
 	err = shared.UnicastToRPCServer(
 		string(from), rpc_struct.CRPCGetSnapshotHandler,
@@ -315,11 +348,47 @@ func (ma *MasterServer) performReplication(handle common.ChunkHandle) error {
 		shared.DefaultRetryConfig,
 	)
 	if err != nil {
+		ma.chunkServerManager.addGarbage(to, handle)
 		return err
 	}
 
-	err = ma.chunkServerManager.registerReplicas(handle, to, false)
+	// Verify target chunk matches source (length/version/checksum) before registering as a replica.
+	if src != nil {
+		var toSys rpc_struct.SysReportInfoReply
+		if err := shared.UnicastToRPCServer(
+			string(to), rpc_struct.CRPCSysReportHandler,
+			rpc_struct.SysReportInfoArgs{}, &toSys, shared.DefaultRetryConfig,
+		); err != nil {
+			if !strings.Contains(err.Error(), "can't find method") {
+				ma.chunkServerManager.addGarbage(to, handle)
+				return err
+			}
+			log.Warn().Msgf("SysReport unavailable on %v; skipping replication verification for handle %v", to, handle)
+		} else {
+			var dst *common.PersistedChunkInfo
+			for i := range toSys.Chunks {
+				if toSys.Chunks[i].Handle == handle {
+					dst = &toSys.Chunks[i]
+					break
+				}
+			}
+			if dst == nil {
+				ma.chunkServerManager.addGarbage(to, handle)
+				return fmt.Errorf("target %v does not report handle %v after snapshot copy", to, handle)
+			}
+			if dst.Version != src.Version || dst.Length != src.Length || dst.Checksum != src.Checksum {
+				ma.chunkServerManager.addGarbage(to, handle)
+				return fmt.Errorf(
+					"replication verify failed for handle %v: src(v=%v,len=%v,chk=%v) dst(v=%v,len=%v,chk=%v)",
+					handle, src.Version, src.Length, src.Checksum, dst.Version, dst.Length, dst.Checksum,
+				)
+			}
+		}
+	}
+
+	err = ma.chunkServerManager.registerReplicas(handle, to)
 	if err != nil {
+		ma.chunkServerManager.addGarbage(to, handle)
 		return err
 	}
 	ma.chunkServerManager.addChunk([]common.ServerAddr{to}, handle)
@@ -490,6 +559,12 @@ func (ma *MasterServer) RPCHeartBeatHandler(args rpc_struct.HeartBeatArgs, reply
 			return
 		}
 
+		// Keep integrity fields up-to-date so master persistence survives restarts.
+		chk.Lock()
+		chk.checksum = chunkInfo.Checksum
+		chk.length = chunkInfo.Length
+		chk.Unlock()
+
 		if chk.version != chunkInfo.Version {
 			log.Info().Msg(fmt.Sprintf("* handle : %v version on master server is different ", chunkInfo.Handle))
 			log.Info().Msg(fmt.Sprintf("* verifying possible stale chunk %v on chunkserver %v", chunkInfo.Handle, args.Address))
@@ -524,7 +599,7 @@ func (ma *MasterServer) RPCHeartBeatHandler(args rpc_struct.HeartBeatArgs, reply
 			}
 		}
 
-		if err := ma.chunkServerManager.registerReplicas(chunkInfo.Handle, args.Address, false); err != nil {
+		if err := ma.chunkServerManager.registerReplicas(chunkInfo.Handle, args.Address); err != nil {
 			log.Err(err).Stack().Msg(err.Error())
 		}
 		ma.chunkServerManager.addChunk([]common.ServerAddr{args.Address}, chunkInfo.Handle)
@@ -640,7 +715,6 @@ func (ma *MasterServer) RPCGetChunkHandleHandler(
 	file.Lock()
 	defer file.Unlock()
 	if args.Index == common.ChunkIndex(file.Chunks) {
-		file.Chunks++
 		// Note: since one of the servers on creating chunk should be the
 		//  primary, the other 3 should be a replica.
 		addrs, err := ma.chunkServerManager.chooseServers(common.MinimumReplicationFactor + 1) // sample out of the servers we have
@@ -649,6 +723,9 @@ func (ma *MasterServer) RPCGetChunkHandleHandler(
 		}
 		addrs = common.FilterSlice(addrs, func(addr common.ServerAddr) bool { return addr != common.ServerAddr("") })
 		reply.Handle, addrs, err = ma.chunkServerManager.createChunk(args.Path, addrs)
+		// Only advance the namespace chunk count after we have actually allocated/recorded a handle.
+		// (createChunk records the handle in master metadata even if some replicas fail).
+		file.Chunks++
 		if err != nil {
 			return err
 		}

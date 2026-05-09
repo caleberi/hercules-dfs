@@ -17,9 +17,9 @@ import (
 // RetryConfig configures dialing/call timeouts and retry behavior for RPC calls.
 //
 // Notes:
-// - Go's net/rpc does not support context cancellation directly; timeouts are
-//   enforced by setting deadlines on the underlying net.Conn.
-// - Backoff is exponential with optional jitter to avoid coordinated retries.
+//   - Go's net/rpc does not support context cancellation directly; timeouts are
+//     enforced by setting deadlines on the underlying net.Conn.
+//   - Backoff is exponential with optional jitter to avoid coordinated retries.
 type RetryConfig struct {
 	// MaxRetries is the number of attempts including the initial try.
 	MaxRetries int
@@ -37,9 +37,9 @@ type RetryConfig struct {
 }
 
 var DefaultRetryConfig = RetryConfig{
-	MaxRetries: 3,
-	RetryDelay: 500 * time.Millisecond,
-	MaxBackoff: 5 * time.Second,
+	MaxRetries:  3,
+	RetryDelay:  500 * time.Millisecond,
+	MaxBackoff:  5 * time.Second,
 	DialTimeout: 2 * time.Second,
 	CallTimeout: 10 * time.Second,
 	JitterFrac:  0.2,
@@ -136,9 +136,9 @@ func UnicastToRPCServerContext(ctx context.Context, addr string, method string, 
 
 // BroadcastError carries per-target error details for a broadcast RPC call.
 type BroadcastError struct {
-	Index int
-	Addr  string
 	Err   error
+	Addr  string
+	Index int
 }
 
 // BroadcastToRPCServers sends an RPC request to multiple servers concurrently.

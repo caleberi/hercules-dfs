@@ -52,6 +52,9 @@ type chunkInfo struct {
 
 	sync.RWMutex // handling lock during mutation ops
 
+	// checksumDirty indicates checksum must be recomputed from disk before reporting/persisting.
+	checksumDirty bool
+
 	completed    bool // indicates if mutation was ever marked done
 	abandoned    bool // indicates if mutation was ever marked abandoned
 	isCompressed bool // indicates if the chunk is compressed
@@ -74,18 +77,24 @@ type ChunkServer struct {
 
 	shutdownChan chan os.Signal // channel for handling shutdown signals
 
-	leases common.Deque[*common.Lease] // deque of active leases for chunk access
-
-	garbage common.Deque[common.ChunkHandle] // deque of chunks marked for garbage collection
+	decompressPending map[common.Path]archivemanager.ResultInfo
 
 	ServerAddr  common.ServerAddr  // address of this server
 	MasterAddr  common.ServerAddr  // address of the master server
 	MachineInfo common.MachineInfo // information about the server's machine
-	mu          sync.RWMutex       // mutex for synchronizing access to server state
+
+	leases common.Deque[*common.Lease] // deque of active leases for chunk access
+
+	garbage common.Deque[common.ChunkHandle] // deque of chunks marked for garbage collection
+
+	mu sync.RWMutex // mutex for synchronizing access to server state
 
 	garbageMu sync.Mutex // mutex for synchronizing access to the garbage collection list
 
+	decompressPendingMu sync.Mutex
+
 	isDead bool // indicates if the server is marked as dead
+
 }
 
 // PersistedMetaData represents metadata associated with a chunk in a Google File System (GFS).
@@ -166,18 +175,19 @@ func NewChunkServer(serverAddr common.ServerAddr, masterAddr common.ServerAddr, 
 	}
 
 	cs := &ChunkServer{
-		rootDir:         fs,
-		ServerAddr:      serverAddr,
-		MasterAddr:      masterAddr,
-		MachineInfo:     machineInfo,
-		shutdownChan:    make(chan os.Signal),
-		leases:          common.Deque[*common.Lease]{},
-		chunks:          make(map[common.ChunkHandle]*chunkInfo),
-		garbage:         common.Deque[common.ChunkHandle]{},
-		archiver:        archivemanager.NewArchiver(context.Background(), fs, 2),
-		failureDetector: failureDetector,
-		isDead:          false,
-		downloadBuffer:  dbuffer,
+		rootDir:           fs,
+		ServerAddr:        serverAddr,
+		MasterAddr:        masterAddr,
+		MachineInfo:       machineInfo,
+		shutdownChan:      make(chan os.Signal),
+		leases:            common.Deque[*common.Lease]{},
+		chunks:            make(map[common.ChunkHandle]*chunkInfo),
+		garbage:           common.Deque[common.ChunkHandle]{},
+		archiver:          archivemanager.NewArchiver(context.Background(), fs, 2),
+		failureDetector:   failureDetector,
+		isDead:            false,
+		downloadBuffer:    dbuffer,
+		decompressPending: make(map[common.Path]archivemanager.ResultInfo),
 	}
 
 	rpc := rpc.NewServer()
@@ -357,25 +367,64 @@ func (cs *ChunkServer) archiveChunks() error {
 //   - An error if the chunk does not exist, decompression fails, or an issue occurs in the process.
 func (cs *ChunkServer) unarchiveChunks(handle common.ChunkHandle) error {
 	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
 	chunkInfo, ok := cs.chunks[handle]
 	if !ok {
 		return fmt.Errorf("cannot attempt to decompress handle [%v]", handle)
 	}
 
 	if chunkInfo.isCompressed {
+		expectedOut := common.Path(fmt.Sprintf(common.ChunkFileNameFormat, handle))
+
+		// If another goroutine already consumed the result, use the pending cache.
+		cs.decompressPendingMu.Lock()
+		if pending, ok := cs.decompressPending[expectedOut]; ok {
+			delete(cs.decompressPending, expectedOut)
+			cs.decompressPendingMu.Unlock()
+			cs.mu.Unlock()
+			if pending.Err != nil {
+				log.Err(pending.Err).Stack().Msg(string(pending.Path) + " : " + pending.Err.Error())
+				return pending.Err
+			}
+			cs.mu.Lock()
+			chunkInfo.isCompressed = false
+			cs.mu.Unlock()
+			return nil
+		}
+		cs.decompressPendingMu.Unlock()
+
 		filename := fmt.Sprintf(common.ChunkFileNameFormat+".gz", handle)
-		cs.archiver.SubmitDecompress(common.Path(filename))
-		result := <-cs.archiver.DecompressPipeline.Result
+		if err := cs.archiver.SubmitDecompress(common.Path(filename)); err != nil {
+			cs.mu.Unlock()
+			return err
+		}
+		cs.mu.Unlock()
+
+		// DecompressPipeline.Result is shared across all requests; consume until we find our result.
+		var result archivemanager.ResultInfo
+		for {
+			r := <-cs.archiver.DecompressPipeline.Result
+			if r.Path == expectedOut {
+				result = r
+				break
+			}
+			cs.decompressPendingMu.Lock()
+			cs.decompressPending[r.Path] = r
+			cs.decompressPendingMu.Unlock()
+		}
+
 		if result.Err != nil {
 			log.Err(result.Err).Stack().Msg(string(result.Path) + " : " + result.Err.Error())
 			return result.Err
 		}
 		log.Info().Msg(fmt.Sprintf("Decompression Action [%v]\n", result.Path))
+
+		cs.mu.Lock()
 		chunkInfo.isCompressed = false
+		cs.mu.Unlock()
+		return nil
 	}
 
+	cs.mu.Unlock()
 	return nil
 }
 
@@ -547,6 +596,21 @@ func (cs *ChunkServer) persistMetadata() error {
 	var metadatas []PersistedMetaData
 
 	for handle, ch := range cs.chunks {
+		// Recompute checksum lazily (avoid hashing the full chunk on every write).
+		if ch.checksumDirty && !ch.isCompressed {
+			filename := fmt.Sprintf(common.ChunkFileNameFormat, handle)
+			f, ferr := cs.rootDir.GetFile(filename, os.O_RDONLY, common.FileMode)
+			if ferr == nil {
+				if _, serr := f.Seek(0, io.SeekStart); serr == nil {
+					hasher := sha256.New()
+					if _, cerr := io.Copy(hasher, f); cerr == nil {
+						ch.checksum = common.Checksum(hasher.Sum(nil))
+						ch.checksumDirty = false
+					}
+				}
+				_ = f.Close()
+			}
+		}
 		persistMetadata := PersistedMetaData{
 			ChunkSize:       int64(len(ch.mutations)) / 1024, // in KB
 			Mutations:       ch.mutations,
@@ -588,15 +652,24 @@ func (cs *ChunkServer) garbageCollection() error {
 	defer cs.garbageMu.Unlock()
 
 	log.Info().Msg("::: Doing some garbage collection >>> ")
+	var observed []error
+	var deletedAny bool
 	for range cs.garbage.Length() {
 		handle := cs.garbage.PopFront()
 		err := cs.deleteChunk(handle)
 		if err != nil {
 			log.Err(err).Stack().Msg(fmt.Sprintf("Server %s: failed to delete chunk %v", cs.ServerAddr, handle))
-			return err
+			observed = append(observed, err)
+			continue
+		}
+		deletedAny = true
+	}
+	if deletedAny {
+		if err := cs.persistMetadata(); err != nil {
+			observed = append(observed, err)
 		}
 	}
-	return nil
+	return errors.Join(observed...)
 }
 
 // deleteChunk removes a specified chunk from the server's storage and chunk map.
@@ -638,7 +711,7 @@ func (cs *ChunkServer) deleteChunk(handle common.ChunkHandle) error {
 		return err
 	}
 
-	return cs.persistMetadata()
+	return nil
 }
 
 // Shutdown gracefully terminates the server, ensuring proper cleanup of resources.
@@ -745,6 +818,21 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArgs, re
 
 	chunkInfos := make([]common.PersistedChunkInfo, 0)
 	for h, ch := range cs.chunks {
+		// If checksum is dirty, refresh before reporting to master.
+		if ch.checksumDirty && !ch.isCompressed {
+			filename := fmt.Sprintf(common.ChunkFileNameFormat, h)
+			f, err := cs.rootDir.GetFile(filename, os.O_RDONLY, common.FileMode)
+			if err == nil {
+				if _, serr := f.Seek(0, io.SeekStart); serr == nil {
+					hasher := sha256.New()
+					if _, cerr := io.Copy(hasher, f); cerr == nil {
+						ch.checksum = common.Checksum(hasher.Sum(nil))
+						ch.checksumDirty = false
+					}
+				}
+				_ = f.Close()
+			}
+		}
 		chunkInfos = append(chunkInfos, common.PersistedChunkInfo{
 			Handle:       h,
 			Checksum:     ch.checksum,
@@ -779,15 +867,10 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArgs, re
 	return nil
 }
 
-// RPCCheckChunkVersionHandler verifies the version of a chunk against a provided version.
-// It checks if the chunk specified by args.Handle exists in the server's chunk map (cs.chunks)
-// and compares its version with the provided args.Version. If the chunk is one version behind,
-// it updates the chunk's version and last modified time, marking it as not stale. Otherwise,
-// the chunk is marked as abandoned and considered not stale. The function is used in a distributed
-// storage system to ensure chunk version consistency, likely called by the master server or other
-// servers during replication or coordination (e.g., in heartBeat). It is thread-safe, using a mutex
-// to protect access to cs.chunks during read and write operations. The result is returned in the
-// reply.Stale field, where false indicates the chunk is valid or updated.
+// RPCCheckChunkVersionHandler compares the local chunk version to the master's authoritative Version.
+// Not stale if local equals Version (lease renewal / quorum), or if local is exactly one below Version
+// (single-step catch-up). Any other mismatch returns Stale=true but does not abandon the chunk:
+// ahead replicas (reorder/skew) or multi-step lag should be resolved via replication/GC, not local destruction.
 //
 // Parameters:
 //   - args: The RPC arguments containing the chunk handle (args.Handle) and version (args.Version).
@@ -799,9 +882,9 @@ func (cs *ChunkServer) RPCSysReportHandler(args rpc_struct.SysReportInfoArgs, re
 func (cs *ChunkServer) RPCCheckChunkVersionHandler(
 	args rpc_struct.CheckChunkVersionArgs, reply *rpc_struct.CheckChunkVersionReply) error {
 	cs.mu.Lock()
-	chinfo, ok := cs.chunks[args.Handle]
-	cs.mu.Unlock()
+	defer cs.mu.Unlock()
 
+	chinfo, ok := cs.chunks[args.Handle]
 	if !ok {
 		log.Info().Msgf(
 			"Server %s: chunk %v not found, marking as stale",
@@ -810,8 +893,11 @@ func (cs *ChunkServer) RPCCheckChunkVersionHandler(
 		return nil
 	}
 
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
+	if chinfo.version == args.Version {
+		chinfo.lastModified = time.Now()
+		reply.Stale = false
+		return nil
+	}
 
 	if chinfo.version+common.ChunkVersion(1) == args.Version {
 		log.Info().Msgf(
@@ -823,12 +909,18 @@ func (cs *ChunkServer) RPCCheckChunkVersionHandler(
 		return nil
 	}
 
-	log.Warn().Msgf(
-		"Server %s: chunk %v is stale: local version %v, expected %v",
-		cs.ServerAddr, args.Handle, chinfo.version, args.Version)
-	chinfo.abandoned = true
-	chinfo.lastModified = time.Now()
 	reply.Stale = true
+	chinfo.lastModified = time.Now()
+	if chinfo.version > args.Version {
+		log.Warn().Msgf(
+			"Server %s: chunk %v local version %v ahead of authoritative %v (stale for quorum; not abandoning)",
+			cs.ServerAddr, args.Handle, chinfo.version, args.Version)
+		return nil
+	}
+
+	log.Warn().Msgf(
+		"Server %s: chunk %v is stale: local version %v, authoritative %v (not abandoning)",
+		cs.ServerAddr, args.Handle, chinfo.version, args.Version)
 	return nil
 }
 
@@ -899,16 +991,17 @@ func (cs *ChunkServer) RPCCreateChunkHandler(args rpc_struct.CreateChunkArgs, re
 	}
 
 	cs.chunks[args.Handle] = &chunkInfo{
-		length:       0,
-		version:      0,
-		mutations:    make(map[common.ChunkVersion]common.Mutation),
-		isCompressed: false,
-		abandoned:    false,
-		completed:    false,
-		creationTime: time.Now(),
-		lastModified: time.Now(),
-		replication:  0,
-		serverStatus: 200,
+		length:        0,
+		version:       0,
+		mutations:     make(map[common.ChunkVersion]common.Mutation),
+		isCompressed:  false,
+		abandoned:     false,
+		completed:     false,
+		checksumDirty: true,
+		creationTime:  time.Now(),
+		lastModified:  time.Now(),
+		replication:   0,
+		serverStatus:  200,
 	}
 
 	filename := fmt.Sprintf(common.ChunkFileNameFormat, args.Handle)
@@ -1128,15 +1221,15 @@ func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, re
 	chInfo, ok := cs.chunks[handle]
 	cs.mu.RUnlock()
 
+	if !ok || chInfo.abandoned {
+		return fmt.Errorf("%v is either abandoned or lives in another dimension", handle)
+	}
+
 	if chInfo.isCompressed {
 		if err := cs.unarchiveChunks(handle); err != nil {
 			return err
 		}
 	}
-	if !ok || chInfo.abandoned {
-		return fmt.Errorf("%v is either abandoned or lives in another dimension", handle)
-	}
-
 	var mutationType common.MutationType
 	offset := chInfo.length
 	newLength := chInfo.length + common.Offset(len(data))
@@ -1225,6 +1318,12 @@ func (cs *ChunkServer) RPCGetSnapshotHandler(args rpc_struct.GetSnapshotArgs, re
 	if _, err := cs.readChunk(handle, 0, data); err != nil {
 		return err
 	}
+	// Snapshot reads the whole chunk; refresh checksum from the snapshot bytes.
+	sum := sha256.Sum256(data)
+	cs.mu.Lock()
+	chInfo.checksum = common.Checksum(sum[:])
+	chInfo.checksumDirty = false
+	cs.mu.Unlock()
 
 	var r rpc_struct.ApplyCopyReply
 	applyCopyArgs := rpc_struct.ApplyCopyArgs{
@@ -1243,12 +1342,12 @@ func (cs *ChunkServer) RPCGetSnapshotHandler(args rpc_struct.GetSnapshotArgs, re
 //
 // Args:
 //   - args: ApplyCopyArgs containing the chunk handle, data to write, and version number.
-//   - reply: AppendChunkReply to store the result of the operation (currently unused).
+//   - reply: ApplyCopyReply with ErrorCode set to Success on success.
 //
 // Returns:
 //   - error: Returns an error if the chunk does not exist, is abandoned, unarchiving fails, or the write
 //     operation fails. Returns nil if the copy operation is successful.
-func (cs *ChunkServer) RPCApplyCopyHandler(args rpc_struct.ApplyCopyArgs, reply *rpc_struct.AppendChunkReply) error {
+func (cs *ChunkServer) RPCApplyCopyHandler(args rpc_struct.ApplyCopyArgs, reply *rpc_struct.ApplyCopyReply) error {
 	handle := args.Handle
 	cs.mu.RLock()
 	chInfo, ok := cs.chunks[handle]
@@ -1264,7 +1363,7 @@ func (cs *ChunkServer) RPCApplyCopyHandler(args rpc_struct.ApplyCopyArgs, reply 
 		}
 	}
 
-	n, err := cs.writeChunk(handle, args.Data, common.MutationWrite, 0, true)
+	_, err := cs.writeChunk(handle, args.Data, common.MutationWrite, 0, true)
 	if err != nil {
 		return err
 	}
@@ -1273,7 +1372,7 @@ func (cs *ChunkServer) RPCApplyCopyHandler(args rpc_struct.ApplyCopyArgs, reply 
 	cs.mu.Unlock()
 	log.Info().Msgf("Server %v : Copy handler done", cs.ServerAddr)
 
-	reply.Offset = common.Offset(n)
+	reply.ErrorCode = common.Success
 	return nil
 }
 
@@ -1508,24 +1607,11 @@ func (cs *ChunkServer) writeChunk(handle common.ChunkHandle, data []byte, mutati
 	if newLen >= common.ChunkMaxSizeInByte {
 		chInfo.completed = true
 	}
+	chInfo.checksumDirty = true
 
 	if err := fs.Sync(); err != nil {
 		log.Err(err).Msgf("failed to sync chunk %v to disk", handle)
 	}
-
-	if _, err := fs.Seek(0, io.SeekStart); err != nil {
-		log.Err(err).Msgf("failed to seek to start for checksum calculation on chunk %v", handle)
-		log.Warn().Msgf("Checksum skipped for chunk %v due to seek error, but write succeeded", handle)
-		return int(newLen), err
-	}
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, fs); err != nil {
-		log.Err(err).Msgf("failed to read chunk %v for checksum", handle)
-		log.Warn().Msgf("Checksum calculation failed for chunk %v, but write succeeded", handle)
-		return int(newLen), nil
-	}
-	chInfo.checksum = common.Checksum(hasher.Sum(nil))
 	return int(newLen), nil
 }
 

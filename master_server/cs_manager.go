@@ -16,12 +16,17 @@ import (
 
 // ChunkServerManager manages chunk servers, chunks, and file metadata in a distributed file system.
 // It maintains mappings of servers, chunks, and files, and handles synchronization and replica migration.
-// The struct uses multiple locks to ensure thread-safe access to its fields.
+//
+// Locking (avoid races; nested locks always acquire the embedded RWMutex before chunkMutex):
+//   - Embedded sync.RWMutex: protects files, handleToPathMapping, replicaMigration, numberOfCreatedChunkHandle.
+//   - chunkMutex: protects the chunks map only (values are additionally guarded by each chunkInfo mutex).
+//   - serverMutex: protects the servers map and HeartBeat registration paths.
 type ChunkServerManager struct {
 	servers                    map[common.ServerAddr]*chunkServerInfo // servers maps server addresses to their corresponding chunk server information.
 	chunks                     map[common.ChunkHandle]*chunkInfo      // chunks maps chunk handles to their corresponding chunk information.
 	files                      map[common.Path]*fileInfo              // files maps file paths to their corresponding file information.
 	handleToPathMapping        map[common.ChunkHandle]common.Path     // handleToPathMapping maps chunk handles to their associated file paths.
+	replicationInProgress      map[common.ChunkHandle]time.Time       // replicationInProgress tracks handles currently being re-replicated.
 	replicaMigration           []common.ChunkHandle                   // replicaMigration stores chunk handles involved in replica migration operations.
 	numberOfCreatedChunkHandle common.ChunkHandle                     // numberOfCreatedChunkHandle tracks the total number of chunk handles created.
 	sync.RWMutex                                                      // RWMutex provides a global lock for coordinating access to the ChunkServerManager's fields.
@@ -34,12 +39,31 @@ func NewChunkServerManager() *ChunkServerManager {
 		chunkMutex:                 sync.RWMutex{},
 		serverMutex:                sync.RWMutex{},
 		replicaMigration:           make([]common.ChunkHandle, 0),
+		replicationInProgress:      make(map[common.ChunkHandle]time.Time),
 		servers:                    make(map[common.ServerAddr]*chunkServerInfo),
 		chunks:                     make(map[common.ChunkHandle]*chunkInfo),
 		files:                      make(map[common.Path]*fileInfo),
 		handleToPathMapping:        make(map[common.ChunkHandle]common.Path),
 		numberOfCreatedChunkHandle: 0,
 	}
+}
+
+// TryStartReplication marks a handle as in-progress and returns whether it was newly started.
+// This prevents duplicate concurrent replication attempts for the same handle.
+func (csm *ChunkServerManager) TryStartReplication(handle common.ChunkHandle) bool {
+	csm.Lock()
+	defer csm.Unlock()
+	if _, exists := csm.replicationInProgress[handle]; exists {
+		return false
+	}
+	csm.replicationInProgress[handle] = time.Now()
+	return true
+}
+
+func (csm *ChunkServerManager) FinishReplication(handle common.ChunkHandle) {
+	csm.Lock()
+	defer csm.Unlock()
+	delete(csm.replicationInProgress, handle)
 }
 
 // getReplicas retrieves the list of server addresses hosting replicas for a given chunk handle.
@@ -70,32 +94,19 @@ func (csm *ChunkServerManager) getReplicas(handle common.ChunkHandle) ([]common.
 }
 
 // registerReplicas adds a server address to the list of replicas for a given chunk handle.
-// It performs a thread-safe update to the chunk's location list, using either a read lock or a global lock based on the readLock parameter.
-// If the chunk handle does not exist, an error is returned.
+// Chunk map lookups use chunkMutex (not the embedded mutex) so this does not race with other chunk-indexed APIs.
 //
 // Parameters:
 //   - handle: The chunk handle identifying the chunk to register a replica for.
 //   - addr: The server address to be added to the chunk's replica locations.
-//   - readLock: If true, uses a read lock (RLock) for accessing the chunks map; otherwise, uses a global write lock.
 //
 // Returns:
 //   - An error if the chunk handle is not found in the chunks map; otherwise, nil.
 func (csm *ChunkServerManager) registerReplicas(
-	handle common.ChunkHandle, addr common.ServerAddr, readLock bool) error {
-	var (
-		chunkInfo *chunkInfo
-		ok        bool
-	)
-
-	if readLock {
-		csm.chunkMutex.RLock()
-		chunkInfo, ok = csm.chunks[handle]
-		csm.chunkMutex.RUnlock()
-	} else {
-		csm.Lock()
-		defer csm.Unlock()
-		chunkInfo, ok = csm.chunks[handle]
-	}
+	handle common.ChunkHandle, addr common.ServerAddr) error {
+	csm.chunkMutex.RLock()
+	chunkInfo, ok := csm.chunks[handle]
+	csm.chunkMutex.RUnlock()
 
 	if !ok {
 		return fmt.Errorf("cannot find chunk %v", handle)
@@ -145,6 +156,8 @@ func (csm *ChunkServerManager) detectDeadServer() []common.ServerAddr {
 //   - An error containing a semicolon-separated list of error messages if any chunks are not found
 //     or if all replicas for a chunk are lost; otherwise, nil.
 func (csm *ChunkServerManager) removeChunks(handles []common.ChunkHandle, server common.ServerAddr) error {
+	csm.Lock()
+	defer csm.Unlock()
 	csm.chunkMutex.Lock()
 	defer csm.chunkMutex.Unlock()
 	errs := []string{}
@@ -323,9 +336,9 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 	lease := &common.Lease{}
 
 	log.Info().Msgf("reading chunk [%#v] in order to produce new lease with locations -> %v", chk, chk.locations)
-	if chk.isExpired(time.Now()) { // chunk has expired so move it
-		chk.version++
-
+	if chk.isExpired(time.Now()) {
+		// Lease expiry alone must not bump chunk version (versions track mutations / explicit recovery).
+		// Probe replicas against the master's current authoritative version; aligned replicas stay in the replica set.
 		arg := rpc_struct.CheckChunkVersionArgs{
 			Version: chk.version,
 			Handle:  handle,
@@ -366,7 +379,6 @@ func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*commo
 			csm.Unlock()
 
 			if len(chk.locations) == 0 {
-				chk.version--
 				return nil, nil, fmt.Errorf("no replica for %v", handle)
 			}
 		} else {
@@ -472,6 +484,7 @@ func (csm *ChunkServerManager) createChunk(path common.Path, addrs []common.Serv
 	// create a chunk and update the record on master
 	chk := &chunkInfo{
 		path:   path,
+		length: 0,
 		expire: time.Now().Add(common.LeaseTimeout),
 	}
 	csm.chunkMutex.Lock()
@@ -560,6 +573,8 @@ func (csm *ChunkServerManager) chooseReplicationServer(handle common.ChunkHandle
 func (csm *ChunkServerManager) SerializeChunks() []serialChunkInfo {
 	csm.RLock()
 	defer csm.RUnlock()
+	csm.chunkMutex.RLock()
+	defer csm.chunkMutex.RUnlock()
 
 	var ret []serialChunkInfo
 	for k, v := range csm.files {
@@ -568,15 +583,21 @@ func (csm *ChunkServerManager) SerializeChunks() []serialChunkInfo {
 		}
 		var chunks []common.PersistedChunkInfo
 		for _, handle := range v.handles {
-			var version common.ChunkVersion
+			var (
+				version  common.ChunkVersion
+				checksum common.Checksum
+				chunkLen common.Offset
+			)
 			if chk, ok := csm.chunks[handle]; ok && chk != nil {
 				version = chk.version
+				checksum = chk.checksum
+				chunkLen = chk.length
 			}
 			chunks = append(chunks, common.PersistedChunkInfo{
 				Handle:   handle,
 				Version:  version,
-				Checksum: "",
-				Length:   0,
+				Checksum: checksum,
+				Length:   chunkLen,
 			})
 		}
 		ret = append(ret, serialChunkInfo{Path: k, Info: chunks})
@@ -613,6 +634,8 @@ func (csm *ChunkServerManager) HeartBeat(addr common.ServerAddr, info common.Mac
 }
 
 func (csm *ChunkServerManager) DeserializeChunks(chunkInfos []serialChunkInfo) {
+	csm.Lock()
+	defer csm.Unlock()
 	csm.chunkMutex.Lock()
 	defer csm.chunkMutex.Unlock()
 
@@ -627,6 +650,7 @@ func (csm *ChunkServerManager) DeserializeChunks(chunkInfos []serialChunkInfo) {
 			csm.chunks[info.Handle] = &chunkInfo{
 				version:  info.Version,
 				checksum: info.Checksum,
+				length:   info.Length,
 				path:     chunk.Path,
 				expire:   time.Now(),
 			}
@@ -659,10 +683,37 @@ func (csm *ChunkServerManager) getChunk(handle common.ChunkHandle) (*chunkInfo, 
 	return chk, ok
 }
 
+// deleteChunk removes the chunk from the master's maps: replica metadata, per-file handle lists,
+// handle→path index, replica-migration queue, and each chunkserver's cached handle set.
 func (csm *ChunkServerManager) deleteChunk(handle common.ChunkHandle) {
+	csm.Lock()
+	defer csm.Unlock()
+
+	if path, ok := csm.handleToPathMapping[handle]; ok {
+		delete(csm.handleToPathMapping, handle)
+		if fi := csm.files[path]; fi != nil {
+			fi.handles = common.FilterSlice(fi.handles,
+				func(h common.ChunkHandle) bool { return h != handle })
+			if len(fi.handles) == 0 {
+				delete(csm.files, path)
+			}
+		}
+	}
+
+	csm.replicaMigration = common.FilterSlice(csm.replicaMigration,
+		func(h common.ChunkHandle) bool { return h != handle })
+
 	csm.chunkMutex.Lock()
-	defer csm.chunkMutex.Unlock()
 	delete(csm.chunks, handle)
+	csm.chunkMutex.Unlock()
+
+	csm.serverMutex.RLock()
+	for _, sv := range csm.servers {
+		sv.Lock()
+		delete(sv.chunks, handle)
+		sv.Unlock()
+	}
+	csm.serverMutex.RUnlock()
 }
 
 func (csm *ChunkServerManager) GetChunkHandles(filePath common.Path) ([]common.ChunkHandle, error) {
@@ -679,15 +730,34 @@ func (csm *ChunkServerManager) GetChunkHandles(filePath common.Path) ([]common.C
 	return ret, nil
 }
 
+// UpdateFilePath moves the master's file→handles entry from source to target and keeps chunk metadata
+// consistent: handleToPathMapping and each chunkInfo.path must match for heartbeat namespace sync and replication.
 func (csm *ChunkServerManager) UpdateFilePath(source common.Path, target common.Path) error {
-	csm.chunkMutex.Lock()
-	defer csm.chunkMutex.Unlock()
-
-	if _, exists := csm.files[source]; exists {
-		val := csm.files[source]
-		delete(csm.files, source)
-		csm.files[target] = val
+	if source == target {
+		return nil
 	}
+
+	csm.Lock()
+	defer csm.Unlock()
+
+	fi, exists := csm.files[source]
+	if !exists {
+		return nil
+	}
+
+	delete(csm.files, source)
+	csm.files[target] = fi
+
+	csm.chunkMutex.Lock()
+	for _, handle := range fi.handles {
+		csm.handleToPathMapping[handle] = target
+		if chk, ok := csm.chunks[handle]; ok && chk != nil {
+			chk.Lock()
+			chk.path = target
+			chk.Unlock()
+		}
+	}
+	csm.chunkMutex.Unlock()
 
 	return nil
 }
