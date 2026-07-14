@@ -230,6 +230,7 @@ Hercules is a distributed file system that follows the design principles of the 
 
 ## Next Steps
 
+- [Interactive Architecture Slides](../slides/hercules-architecture.html) - Walkthrough from TCP to failure detection
 - [Component Details](components.md) - Deep dive into each component
 - [Data Flow](data-flow.md) - Detailed operation flows
 - [Failure Detection](failure-detection.md) - φ Accrual algorithm details

@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hercules DFS — From TCP to Failure Detection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #132033;
+      --ink-soft: #3a4a5c;
+      --paper: #f4f7fa;
+      --panel: #ffffff;
+      --line: #c9d4e0;
+      --accent: #0b6e6e;
+      --accent-soft: #d7efef;
+      --warn: #9a5b12;
+      --warn-soft: #f7e8d4;
+      --alert: #8b2e2e;
+      --alert-soft: #f5dede;
+      --master: #1f4b7a;
+      --chunk: #0b6e6e;
+      --client: #5a4a2f;
+      --shadow: 0 12px 40px rgba(19, 32, 51, 0.08);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #d9e7f2 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #d7efef 0%, transparent 45%),
+        linear-gradient(160deg, #eef3f7 0%, #e6edf4 48%, #e9f1f0 100%);
+      color: var(--ink);
+      font-family: "Source Sans 3", system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    .deck {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      display: none;
+      padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1.25rem, 4vw, 3.5rem) 4.5rem;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.35s ease, transform 0.35s ease;
+    }
+
+    .slide.active {
+      display: flex;
+      flex-direction: column;
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .slide.exit {
+      display: flex;
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+
+    h1, h2, h3 {
+      font-family: Literata, Georgia, serif;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+    }
+
+    h1 { font-size: clamp(2rem, 4.5vw, 3.4rem); }
+    h2 { font-size: clamp(1.55rem, 3vw, 2.35rem); margin-bottom: 0.75rem; }
+    h3 { font-size: 1.15rem; margin-bottom: 0.4rem; }
+
+    p, li { color: var(--ink-soft); line-height: 1.55; }
+    .lede { font-size: 1.1rem; max-width: 46rem; }
+
+    .eyebrow {
+      display: inline-block;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+
+    .title-slide {
+      justify-content: center;
+      gap: 1.25rem;
+      max-width: 56rem;
+    }
+
+    .title-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 0.5rem;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.7);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+      color: var(--ink-soft);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 1.25rem;
+      flex: 1;
+      min-height: 0;
+      align-items: stretch;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1rem 1.15rem;
+    }
+
+    .card.interactive {
+      cursor: pointer;
+      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card.interactive:hover,
+    .card.interactive.selected {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 16px 36px rgba(11, 110, 110, 0.12);
+    }
+
+    .muted { color: var(--ink-soft); font-size: 0.95rem; }
+
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .kpi .card { text-align: center; padding: 0.9rem 0.6rem; }
+    .kpi strong {
+      display: block;
+      font-family: Literata, Georgia, serif;
+      font-size: 1.35rem;
+      color: var(--ink);
+    }
+    .kpi span { font-size: 0.82rem; }
+
+    .arch {
+      display: grid;
+      grid-template-rows: auto auto auto;
+      gap: 0.85rem;
+      place-items: center;
+      height: 100%;
+    }
+
+    .node {
+      min-width: 10rem;
+      text-align: center;
+      padding: 0.85rem 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: transform 0.2s ease, outline 0.2s ease;
+      outline: 2px solid transparent;
+    }
+
+    .node:hover, .node.active {
+      transform: scale(1.03);
+      outline-color: var(--accent);
+    }
+
+    .node .role {
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 0.2rem;
+    }
+
+    .node.client { border-top: 4px solid var(--client); }
+    .node.master { border-top: 4px solid var(--master); }
+    .node.chunk { border-top: 4px solid var(--chunk); }
+
+    .chunk-row {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .arrow-label {
+      font-size: 0.8rem;
+      color: var(--ink-soft);
+      text-align: center;
+    }
+
+    .detail-pane {
+      min-height: 8rem;
+      background: var(--accent-soft);
+      border: 1px solid #b7dede;
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+    }
+
+    .detail-pane h3 { color: var(--accent); }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      margin-top: 0.75rem;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.75rem;
+      align-items: start;
+      padding: 0.7rem 0.85rem;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      background: rgba(255,255,255,0.55);
+      opacity: 0.45;
+      transition: opacity 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+    }
+
+    .step.on {
+      opacity: 1;
+      border-color: var(--accent);
+      background: #fff;
+    }
+
+    .step-num {
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .controls-inline {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.85rem;
+    }
+
+    button {
+      font-family: inherit;
+      font-weight: 600;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 0.45rem 0.9rem;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.primary:hover { background: #095959; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
+
+    .flow .card {
+      text-align: center;
+      padding: 0.8rem 0.5rem;
+      position: relative;
+      opacity: 0.35;
+      transform: translateY(6px);
+      transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .flow .card.on {
+      opacity: 1;
+      transform: translateY(0);
+      border-color: var(--accent);
+    }
+
+    .flow .card .n {
+      display: inline-grid;
+      place-items: center;
+      width: 1.4rem;
+      height: 1.4rem;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-bottom: 0.35rem;
+    }
+
+    .seq {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.82rem;
+      background: #132033;
+      color: #d7e3ef;
+      border-radius: var(--radius);
+      padding: 1rem;
+      min-height: 14rem;
+      overflow: auto;
+    }
+
+    .seq .line {
+      opacity: 0.25;
+      transition: opacity 0.25s ease, color 0.25s ease;
+      white-space: nowrap;
+    }
+
+    .seq .line.on {
+      opacity: 1;
+      color: #9fe7d8;
+    }
+
+    .seq .line.dim { color: #8aa0b5; }
+
+    .params {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.75rem;
+      background: #fff;
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .params th, .params td {
+      text-align: left;
+      padding: 0.7rem 0.9rem;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.95rem;
+    }
+
+    .params th {
+      background: #e8eef4;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .params tr:last-child td { border-bottom: 0; }
+
+    .phi-lab {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 0.75rem;
+    }
+
+    .meter {
+      height: 0.7rem;
+      background: #dfe7ef;
+      border-radius: 999px;
+      overflow: hidden;
+      margin: 0.75rem 0 0.4rem;
+    }
+
+    .meter > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #9a5b12, var(--alert));
+      transition: width 0.35s ease;
+    }
+
+    .phi-value {
+      font-family: Literata, Georgia, serif;
+      font-size: 2.4rem;
+      color: var(--ink);
+    }
+
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.25rem 0.65rem;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .badge.ok { background: var(--accent-soft); color: var(--accent); }
+    .badge.warn { background: var(--warn-soft); color: var(--warn); }
+    .badge.alert { background: var(--alert-soft); color: var(--alert); }
+
+    .timeline {
+      position: relative;
+      margin-top: 1rem;
+      padding-left: 1.25rem;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0.35rem;
+      top: 0.2rem;
+      bottom: 0.2rem;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .t-item {
+      position: relative;
+      margin-bottom: 0.85rem;
+      padding-left: 0.5rem;
+    }
+
+    .t-item::before {
+      content: "";
+      position: absolute;
+      left: -1.05rem;
+      top: 0.45rem;
+      width: 0.65rem;
+      height: 0.65rem;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .t-item strong { color: var(--ink); }
+
+    .nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.75rem 1.25rem 0.9rem;
+      background: rgba(244, 247, 250, 0.88);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid var(--line);
+      z-index: 20;
+    }
+
+    .progress {
+      flex: 1;
+      height: 4px;
+      background: #d5dee8;
+      border-radius: 999px;
+      overflow: hidden;
+      max-width: 28rem;
+    }
+
+    .progress > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.25s ease;
+    }
+
+    .nav-left, .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      min-width: 9rem;
+    }
+
+    .nav-right { justify-content: flex-end; }
+
+    .slide-count {
+      font-size: 0.85rem;
+      color: var(--ink-soft);
+      min-width: 4.5rem;
+      text-align: center;
+    }
+
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+      margin-top: 1rem;
+    }
+
+    .toc button {
+      text-align: left;
+      border-radius: 10px;
+      padding: 0.7rem 0.85rem;
+    }
+
+    .toc button span {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--accent);
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .two-col-list {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem 1.25rem;
+      margin-top: 0.75rem;
+    }
+
+    .two-col-list li {
+      list-style: none;
+      padding-left: 1rem;
+      position: relative;
+    }
+
+    .two-col-list li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.55rem;
+      width: 0.4rem;
+      height: 0.4rem;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .note {
+      margin-top: auto;
+      padding-top: 0.75rem;
+      font-size: 0.85rem;
+      color: var(--ink-soft);
+    }
+
+    .callout {
+      margin-top: 0.85rem;
+      padding: 0.75rem 0.9rem;
+      border-left: 3px solid var(--accent);
+      background: rgba(255,255,255,0.65);
+      border-radius: 0 10px 10px 0;
+      font-size: 0.95rem;
+    }
+
+    @media (max-width: 900px) {
+      .grid-2, .phi-lab, .toc, .two-col-list { grid-template-columns: 1fr; }
+      .grid-3, .kpi, .flow { grid-template-columns: 1fr 1fr; }
+      .slide { padding-bottom: 5.5rem; overflow: auto; }
+      body { overflow: auto; }
+      .nav-left, .nav-right { min-width: auto; }
+      .progress { display: none; }
+    }
+
+    @media (max-width: 560px) {
+      .grid-3, .kpi, .flow { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck" id="deck" aria-live="polite">
+
+    <!-- 0 -->
+    <section class="slide title-slide active" data-title="Title">
+      <div class="eyebrow">Academic Lecture · Distributed Systems</div>
+      <h1>Hercules Distributed File System</h1>
+      <p class="lede">
+        An interactive walkthrough of how Hercules works — from TCP connection
+        establishment, through master–chunkserver delegation, to failure detection
+        and self-healing replication.
+      </p>
+      <div class="title-meta">
+        <span class="chip">GFS-inspired architecture</span>
+        <span class="chip">Go · net/rpc over TCP</span>
+        <span class="chip">φ Accrual failure detection</span>
+      </div>
+      <p class="note">Use ← → or click Next. Press <strong>T</strong> for outline.</p>
+    </section>
+
+    <!-- 1 -->
+    <section class="slide" data-title="Learning path">
+      <div class="eyebrow">Roadmap</div>
+      <h2>What we will learn</h2>
+      <p class="lede">Follow the system in the same order a request travels through it.</p>
+      <div class="toc" id="toc"></div>
+    </section>
+
+    <!-- 2 -->
+    <section class="slide" data-title="Big picture">
+      <div class="eyebrow">Architecture</div>
+      <h2>One master, many chunkservers</h2>
+      <div class="grid-2">
+        <div class="arch" id="archDiagram">
+          <div class="node client" data-role="client" tabindex="0">
+            <div class="role">Client path</div>
+            <strong>Gateway / SDK</strong>
+            <div class="muted">HTTP or Go client</div>
+          </div>
+          <div class="arrow-label">① ask metadata · ② receive locations</div>
+          <div class="node master" data-role="master" tabindex="0">
+            <div class="role">Control plane</div>
+            <strong>Master Server</strong>
+            <div class="muted">Namespace · leases · placement</div>
+          </div>
+          <div class="arrow-label">③ read / write data directly</div>
+          <div class="chunk-row">
+            <div class="node chunk" data-role="chunk" tabindex="0">
+              <div class="role">Data plane</div>
+              <strong>CS-1</strong>
+            </div>
+            <div class="node chunk" data-role="chunk" tabindex="0">
+              <div class="role">Data plane</div>
+              <strong>CS-2</strong>
+            </div>
+            <div class="node chunk" data-role="chunk" tabindex="0">
+              <div class="role">Data plane</div>
+              <strong>CS-3</strong>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="detail-pane" id="archDetail">
+            <h3>Click a component</h3>
+            <p class="muted">Explore each role. Metadata stays on the master; bytes live on chunkservers.</p>
+          </div>
+          <div class="callout">
+            Design rule: <em>separate control from data</em>. Clients talk to the master for
+            “where?”, then to chunkservers for “what?”.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 -->
+    <section class="slide" data-title="Components">
+      <div class="eyebrow">Building blocks</div>
+      <h2>Six pieces that cooperate</h2>
+      <div class="grid-3">
+        <div class="card interactive" data-comp="master">
+          <h3>Master</h3>
+          <p class="muted">Metadata authority: namespace, chunk map, leases, re-replication.</p>
+        </div>
+        <div class="card interactive" data-comp="chunk">
+          <h3>Chunkserver</h3>
+          <p class="muted">Stores 64&nbsp;MB chunks as local files; serves reads and mutations.</p>
+        </div>
+        <div class="card interactive" data-comp="gateway">
+          <h3>Gateway</h3>
+          <p class="muted">HTTP façade that translates REST into HerculesClient RPC calls.</p>
+        </div>
+        <div class="card interactive" data-comp="detector">
+          <h3>Failure detector</h3>
+          <p class="muted">φ Accrual over Redis samples — soft suspicion of dead servers.</p>
+        </div>
+        <div class="card interactive" data-comp="namespace">
+          <h3>Namespace</h3>
+          <p class="muted">Directory tree, path resolution, soft-delete with GC later.</p>
+        </div>
+        <div class="card interactive" data-comp="buffer">
+          <h3>Download buffer</h3>
+          <p class="muted">Stages mutation data before commit; expires after 10&nbsp;s.</p>
+        </div>
+      </div>
+      <div class="detail-pane" id="compDetail" style="margin-top:1rem">
+        <h3>Select a card</h3>
+        <p class="muted">Each component has one clear job. Together they form a GFS-style DFS.</p>
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section class="slide" data-title="Process start">
+      <div class="eyebrow">Lifecycle · Step 1</div>
+      <h2>How a process begins</h2>
+      <p class="lede"><code>main.go</code> chooses a role from flags, then that role opens its listener.</p>
+      <div class="flow" id="bootFlow">
+        <div class="card"><div class="n">1</div><strong>Parse flags</strong><div class="muted">ServerType, addresses</div></div>
+        <div class="card"><div class="n">2</div><strong>Construct server</strong><div class="muted">Master / CS / Gateway</div></div>
+        <div class="card"><div class="n">3</div><strong>Register RPC</strong><div class="muted">rpc.Register(…)</div></div>
+        <div class="card"><div class="n">4</div><strong>Listen TCP</strong><div class="muted">net.Listen("tcp")</div></div>
+        <div class="card"><div class="n">5</div><strong>Accept loop</strong><div class="muted">ServeConn per socket</div></div>
+      </div>
+      <div class="controls-inline">
+        <button class="primary" id="bootPlay">Play startup</button>
+        <button id="bootReset">Reset</button>
+      </div>
+      <div class="kpi">
+        <div class="card"><strong>:9090</strong><span>Master RPC</span></div>
+        <div class="card"><strong>:8081–83</strong><span>Chunkservers</span></div>
+        <div class="card"><strong>:8089</strong><span>Gateway HTTP</span></div>
+        <div class="card"><strong>:6379</strong><span>Redis (φ)</span></div>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section class="slide" data-title="TCP &amp; RPC">
+      <div class="eyebrow">Lifecycle · Step 2</div>
+      <h2>TCP connection &amp; RPC model</h2>
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <h3>Server side</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li>Long-lived TCP listener</li>
+              <li>One goroutine per accepted connection</li>
+              <li>Go <code>net/rpc</code> + <code>encoding/gob</code></li>
+              <li>Methods named <code>MasterServer.*</code> / <code>ChunkServer.*</code></li>
+            </ul>
+          </div>
+          <div class="card" style="margin-top:0.75rem">
+            <h3>Client side</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li><code>shared.UnicastToRPCServer</code> dials TCP per call</li>
+              <li>2&nbsp;s dial timeout · up to 3 retries</li>
+              <li>No connection pool — simplicity over reuse</li>
+              <li>Gateway is HTTP only; data plane stays RPC</li>
+            </ul>
+          </div>
+        </div>
+        <div class="seq" id="rpcSeq" aria-label="RPC call sequence">
+          <div class="line dim">// shared/rpc.go</div>
+          <div class="line">conn := DialContext(ctx, "tcp", addr)</div>
+          <div class="line">client := rpc.NewClient(conn)</div>
+          <div class="line">err := client.Call(method, args, reply)</div>
+          <div class="line">client.Close()</div>
+          <div class="line dim">// retry with exponential backoff if needed</div>
+        </div>
+      </div>
+      <div class="controls-inline">
+        <button class="primary" id="rpcPlay">Animate call</button>
+        <button id="rpcReset">Reset</button>
+      </div>
+      <p class="note">Key idea: every RPC is a fresh TCP socket. Servers keep listening; clients come and go.</p>
+    </section>
+
+    <!-- 6 -->
+    <section class="slide" data-title="Registration">
+      <div class="eyebrow">Lifecycle · Step 3</div>
+      <h2>Lazy chunkserver registration</h2>
+      <p class="lede">There is no static membership file. A chunkserver appears when it first heartbeats.</p>
+      <div class="grid-2">
+        <div class="steps" id="regSteps">
+          <div class="step"><div class="step-num">1</div><div><strong>Chunkserver starts</strong><div class="muted">Listens on its address; knows master address.</div></div></div>
+          <div class="step"><div class="step-num">2</div><div><strong>Immediate heartbeat</strong><div class="muted">Calls <code>MasterServer.RPCHeartBeatHandler</code>.</div></div></div>
+          <div class="step"><div class="step-num">3</div><div><strong>Master inserts entry</strong><div class="muted"><code>ChunkServerManager.HeartBeat</code> adds server map entry.</div></div></div>
+          <div class="step"><div class="step-num">4</div><div><strong>Later heartbeats sync inventory</strong><div class="muted">Master pulls chunk report via <code>CRPCSysReportHandler</code>.</div></div></div>
+          <div class="step"><div class="step-num">5</div><div><strong>Eligible for placement</strong><div class="muted">New chunks can be assigned to this server.</div></div></div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Stored per server</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li><code>lastHeartBeat</code> — liveness clock</li>
+              <li><code>chunks</code> — handles stored locally</li>
+              <li><code>serverInfo</code> — hostname & proximity RTT</li>
+              <li><code>garbages</code> — handles waiting to be deleted</li>
+            </ul>
+          </div>
+          <div class="controls-inline">
+            <button class="primary" id="regPlay">Step through</button>
+            <button id="regReset">Reset</button>
+          </div>
+          <div class="callout">First heartbeat only registers. Inventory reconciliation begins on the next ones.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section class="slide" data-title="Delegation">
+      <div class="eyebrow">Lifecycle · Step 4</div>
+      <h2>Master delegates work</h2>
+      <p class="lede">The master never ships file bytes. It answers “which servers?” and grants write authority.</p>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Read delegation</h3>
+          <ol class="steps" style="list-style:decimal; padding-left:1.1rem">
+            <li class="muted" style="opacity:1">Client → master: get replicas for chunk handle</li>
+            <li class="muted" style="opacity:1">Master returns locations</li>
+            <li class="muted" style="opacity:1">Client picks a replica (random)</li>
+            <li class="muted" style="opacity:1">Client → chunkserver: <code>CRPCReadChunkHandler</code></li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>Write delegation (leases)</h3>
+          <ol class="steps" style="list-style:decimal; padding-left:1.1rem">
+            <li class="muted" style="opacity:1">Client asks for primary + secondaries</li>
+            <li class="muted" style="opacity:1">Master grants / renews a <strong>120&nbsp;s lease</strong></li>
+            <li class="muted" style="opacity:1">Primary is notified via <code>CRPCGrantLeaseHandler</code></li>
+            <li class="muted" style="opacity:1">Client stages data, then commits on primary</li>
+          </ol>
+        </div>
+      </div>
+      <div class="callout">
+        Lease = temporary write monopoly for one chunk. Only the primary serializes mutations;
+        secondaries apply the same order.
+      </div>
+    </section>
+
+    <!-- 8 -->
+    <section class="slide" data-title="Mutation protocol">
+      <div class="eyebrow">Lifecycle · Step 5</div>
+      <h2>Write path: push then commit</h2>
+      <div class="grid-2">
+        <div class="steps" id="writeSteps">
+          <div class="step"><div class="step-num">1</div><div><strong>Obtain lease</strong><div class="muted">Master returns primary + secondaries.</div></div></div>
+          <div class="step"><div class="step-num">2</div><div><strong>Forward data</strong><div class="muted">Client pipelines bytes to all replicas (<code>CRPCForwardDataHandler</code>).</div></div></div>
+          <div class="step"><div class="step-num">3</div><div><strong>Buffer stage</strong><div class="muted">Each replica stores data in download buffer (10&nbsp;s TTL).</div></div></div>
+          <div class="step"><div class="step-num">4</div><div><strong>Commit on primary</strong><div class="muted">Primary assigns serial order and writes.</div></div></div>
+          <div class="step"><div class="step-num">5</div><div><strong>Apply on secondaries</strong><div class="muted"><code>CRPCApplyMutationHandler</code> in the same order.</div></div></div>
+          <div class="step"><div class="step-num">6</div><div><strong>Ack client</strong><div class="muted">Primary replies only after secondaries succeed.</div></div></div>
+        </div>
+        <div>
+          <div class="seq" id="writeSeq">
+            <div class="line dim">Client                Primary           Secondary</div>
+            <div class="line">|-- GetLease --------&gt; Master</div>
+            <div class="line">|-- ForwardData -----&gt; | --------------&gt; |</div>
+            <div class="line">|-- WriteChunk ------&gt; |</div>
+            <div class="line">                       |-- ApplyMut ---&gt; |</div>
+            <div class="line">                       |&lt;-- Ack -------- |</div>
+            <div class="line">|&lt;-- Success --------- |</div>
+          </div>
+          <div class="controls-inline">
+            <button class="primary" id="writePlay">Animate protocol</button>
+            <button id="writeReset">Reset</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 -->
+    <section class="slide" data-title="Heartbeats">
+      <div class="eyebrow">Lifecycle · Step 6</div>
+      <h2>Dual heartbeat model</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Chunkserver → Master</h3>
+          <p class="muted">Every <strong>5&nbsp;s</strong>. Carries machine info, optional lease extension request, network timing.</p>
+          <div class="callout">Refreshes <code>lastHeartBeat</code> and syncs chunk inventory.</div>
+        </div>
+        <div class="card">
+          <h3>Master → Chunkserver</h3>
+          <p class="muted">Every <strong>10&nbsp;s</strong> health loop. Probes live servers, runs φ tracking, triggers replication.</p>
+          <div class="callout">Also removes servers silent for ≥ <strong>60&nbsp;s</strong>.</div>
+        </div>
+      </div>
+      <div class="kpi" style="margin-top:1rem">
+        <div class="card"><strong>5 s</strong><span>CS heartbeat</span></div>
+        <div class="card"><strong>10 s</strong><span>Master health tick</span></div>
+        <div class="card"><strong>60 s</strong><span>Dead timeout</span></div>
+        <div class="card"><strong>3×</strong><span>Min replicas</span></div>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section class="slide" data-title="Hard failure">
+      <div class="eyebrow">Fault tolerance · Hard path</div>
+      <h2>Timeout marks a server dead</h2>
+      <p class="lede">φ Accrual warns; the <em>hard</em> decision uses a simple wall-clock timeout.</p>
+      <div class="timeline">
+        <div class="t-item"><strong>T + 0 s</strong> — Chunkserver stops heartbeating.</div>
+        <div class="t-item"><strong>T + 5–55 s</strong> — <code>lastHeartBeat</code> ages; φ may rise (logged).</div>
+        <div class="t-item"><strong>T + 60 s</strong> — <code>detectDeadServer()</code> flags the address.</div>
+        <div class="t-item"><strong>Same tick</strong> — <code>removeServer</code> + <code>removeChunks</code>; under-replicated handles queued.</div>
+        <div class="t-item"><strong>Next health tick</strong> — <code>performReplication()</code> restores replica count.</div>
+      </div>
+      <div class="callout">
+        Dead if <code>time.Since(lastHeartBeat) ≥ 60s</code> (or heartbeat never arrived).
+        Typical detection window: about 60–70 seconds.
+      </div>
+    </section>
+
+    <!-- 11 -->
+    <section class="slide" data-title="φ Accrual">
+      <div class="eyebrow">Fault tolerance · Soft path</div>
+      <h2>φ Accrual failure detection</h2>
+      <p class="lede">Instead of a binary “alive/dead”, φ estimates how surprising a missed heartbeat is.</p>
+      <div class="phi-lab">
+        <div class="card">
+          <h3>Interactive intuition</h3>
+          <label class="muted" for="delaySlider">Time since last sample (ms relative to mean)</label>
+          <input id="delaySlider" type="range" min="0" max="4000" value="800" style="width:100%; margin:0.6rem 0" />
+          <div class="phi-value" id="phiValue">φ ≈ 0.5</div>
+          <div class="meter"><span id="phiBar"></span></div>
+          <div><span class="badge ok" id="phiBadge">Healthy</span></div>
+          <p class="muted" style="margin-top:0.75rem">
+            Formula: <code>φ = −log₁₀(1 − CDF((t−μ)/σ))</code>
+          </p>
+        </div>
+        <div class="card">
+          <h3>How Hercules uses it</h3>
+          <ul class="two-col-list" style="grid-template-columns:1fr">
+            <li>Heartbeats produce <code>NetworkData</code> RTT samples</li>
+            <li>Redis sampling window stores recent arrivals</li>
+            <li>Inter-arrival mean μ and σ are estimated</li>
+            <li><code>Predict()</code> returns φ + message</li>
+            <li>Today: advisory logging only — not the kill switch</li>
+          </ul>
+          <div class="callout">
+            Typical reading: φ &lt; 1 healthy · 1–8 warning · ≥ 8 high suspicion
+            (exact thresholds differ by process config).
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section class="slide" data-title="Re-replication">
+      <div class="eyebrow">Fault tolerance · Healing</div>
+      <h2>Re-replication restores durability</h2>
+      <div class="grid-2">
+        <div class="steps" id="repSteps">
+          <div class="step"><div class="step-num">1</div><div><strong>Queue migration</strong><div class="muted">Replica count &lt; 3 after failure or stale purge.</div></div></div>
+          <div class="step"><div class="step-num">2</div><div><strong>Choose source &amp; target</strong><div class="muted">Live holder → live non-holder.</div></div></div>
+          <div class="step"><div class="step-num">3</div><div><strong>Create empty chunk</strong><div class="muted">Target runs <code>CRPCCreateChunkHandler</code>.</div></div></div>
+          <div class="step"><div class="step-num">4</div><div><strong>Snapshot copy</strong><div class="muted">Source <code>GetSnapshot</code> → target <code>ApplyCopy</code>.</div></div></div>
+          <div class="step"><div class="step-num">5</div><div><strong>Verify</strong><div class="muted">Compare version, length, SHA-256 checksum.</div></div></div>
+          <div class="step"><div class="step-num">6</div><div><strong>Register replica</strong><div class="muted">Master updates locations; chunk is healthy again.</div></div></div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Integrity checks</h3>
+            <p class="muted">Checksums are whole-chunk SHA-256. Used for replication verification and metadata sync — not yet on every read.</p>
+          </div>
+          <div class="card" style="margin-top:0.75rem">
+            <h3>Concurrency guard</h3>
+            <p class="muted"><code>replicationInProgress</code> prevents two copies of the same handle at once.</p>
+          </div>
+          <div class="controls-inline">
+            <button class="primary" id="repPlay">Step recovery</button>
+            <button id="repReset">Reset</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13 -->
+    <section class="slide" data-title="Parameters">
+      <div class="eyebrow">Reference</div>
+      <h2>Key constants to remember</h2>
+      <table class="params">
+        <thead>
+          <tr><th>Parameter</th><th>Value</th><th>Effect</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Chunk size</td><td>64 MB</td><td>Unit of storage &amp; replication</td></tr>
+          <tr><td>Min replicas</td><td>3</td><td>Triggers re-replication when lower</td></tr>
+          <tr><td>CS heartbeat</td><td>5 s</td><td>Liveness + inventory sync</td></tr>
+          <tr><td>Master health check</td><td>10 s</td><td>Dead scan + φ + replication</td></tr>
+          <tr><td>Dead timeout</td><td>60 s</td><td>Hard failure decision</td></tr>
+          <tr><td>Lease timeout</td><td>120 s</td><td>Primary write authority window</td></tr>
+          <tr><td>Download buffer TTL</td><td>10 s</td><td>Staged mutation data expiry</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Source of truth: <code>common/constants.go</code>.</p>
+    </section>
+
+    <!-- 14 -->
+    <section class="slide" data-title="End-to-end">
+      <div class="eyebrow">Synthesis</div>
+      <h2>The full story in one breath</h2>
+      <div class="card">
+        <ol class="two-col-list" style="grid-template-columns:1fr; gap:0.65rem">
+          <li><strong>Boot</strong> — process registers RPC handlers and listens on TCP.</li>
+          <li><strong>Join</strong> — chunkservers announce themselves with heartbeats.</li>
+          <li><strong>Ask</strong> — clients (via gateway/SDK) query the master for metadata.</li>
+          <li><strong>Delegate</strong> — master returns locations and grants leases.</li>
+          <li><strong>Transfer</strong> — clients move bytes directly with chunkservers.</li>
+          <li><strong>Watch</strong> — dual heartbeats refresh liveness; φ estimates suspicion.</li>
+          <li><strong>Heal</strong> — after 60&nbsp;s silence, master removes the server and re-replicates.</li>
+        </ol>
+      </div>
+      <div class="callout">
+        Control plane answers “who holds the chunk?” · Data plane answers “here are the bytes.”
+        Failure detection keeps the map honest; replication keeps durability.
+      </div>
+    </section>
+
+    <!-- 15 -->
+    <section class="slide title-slide" data-title="Closing">
+      <div class="eyebrow">Further reading</div>
+      <h1>Continue exploring</h1>
+      <div class="two-col-list">
+        <li>Ghemawat et al., <em>The Google File System</em> (2003)</li>
+        <li>Hayashibara et al., <em>φ Accrual Failure Detection</em></li>
+        <li><code>docs/architecture/overview.md</code></li>
+        <li><code>docs/architecture/components.md</code></li>
+        <li><code>master_server/</code> · <code>chunkserver/</code> · <code>detector/</code></li>
+        <li><code>shared/rpc.go</code> · <code>common/constants.go</code></li>
+      </div>
+      <p class="note" style="margin-top:1.5rem">Open this file in a browser: <code>docs/slides/hercules-architecture.html</code></p>
+    </section>
+  </div>
+
+  <nav class="nav" aria-label="Slide navigation">
+    <div class="nav-left">
+      <button id="prevBtn" type="button">← Prev</button>
+      <button id="tocBtn" type="button">Outline</button>
+    </div>
+    <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
+    <div class="slide-count" id="slideCount">1 / 1</div>
+    <div class="nav-right">
+      <button id="nextBtn" class="primary" type="button">Next →</button>
+    </div>
+  </nav>
+
+  <script>
+    (function () {
+      const slides = Array.from(document.querySelectorAll(".slide"));
+      let index = 0;
+      let timers = [];
+
+      const slideCount = document.getElementById("slideCount");
+      const progressBar = document.getElementById("progressBar");
+      const prevBtn = document.getElementById("prevBtn");
+      const nextBtn = document.getElementById("nextBtn");
+      const tocBtn = document.getElementById("tocBtn");
+      const toc = document.getElementById("toc");
+
+      const clearTimers = () => {
+        timers.forEach(clearTimeout);
+        timers = [];
+      };
+
+      const show = (i) => {
+        clearTimers();
+        index = (i + slides.length) % slides.length;
+        slides.forEach((s, n) => {
+          s.classList.toggle("active", n === index);
+        });
+        slideCount.textContent = (index + 1) + " / " + slides.length;
+        progressBar.style.width = ((index + 1) / slides.length * 100) + "%";
+        prevBtn.disabled = index === 0;
+        nextBtn.textContent = index === slides.length - 1 ? "Restart" : "Next →";
+        document.title = slides[index].dataset.title + " · Hercules DFS";
+      };
+
+      prevBtn.addEventListener("click", () => show(index - 1));
+      nextBtn.addEventListener("click", () => {
+        if (index === slides.length - 1) show(0);
+        else show(index + 1);
+      });
+      tocBtn.addEventListener("click", () => show(1));
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+          e.preventDefault();
+          if (index === slides.length - 1) show(0);
+          else show(index + 1);
+        } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+          e.preventDefault();
+          show(index - 1);
+        } else if (e.key === "Home") {
+          show(0);
+        } else if (e.key === "End") {
+          show(slides.length - 1);
+        } else if (e.key.toLowerCase() === "t") {
+          show(1);
+        }
+      });
+
+      // Build outline
+      slides.forEach((s, n) => {
+        if (n === 0) return;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.innerHTML = "<span>Slide " + String(n + 1).padStart(2, "0") + "</span>" + (s.dataset.title || "");
+        btn.addEventListener("click", () => show(n));
+        toc.appendChild(btn);
+      });
+
+      // Architecture detail
+      const archCopy = {
+        client: {
+          title: "Gateway / Client SDK",
+          body: "External entry. HTTP gateway wraps HerculesClient. All metadata RPCs go to the master; data RPCs go to chunkservers."
+        },
+        master: {
+          title: "Master Server",
+          body: "Single metadata authority. Owns namespace, chunk→server map, leases, garbage lists, and re-replication decisions. Default port 9090."
+        },
+        chunk: {
+          title: "Chunkserver",
+          body: "Stores chunk-{handle}.chk files (≤ 64 MB). Serves reads/writes, heartbeats every 5 s, and participates in snapshot re-replication."
+        }
+      };
+
+      const archDetail = document.getElementById("archDetail");
+      document.querySelectorAll("#archDiagram .node").forEach((node) => {
+        const activate = () => {
+          document.querySelectorAll("#archDiagram .node").forEach((n) => n.classList.remove("active"));
+          node.classList.add("active");
+          const info = archCopy[node.dataset.role];
+          archDetail.innerHTML = "<h3>" + info.title + "</h3><p class='muted'>" + info.body + "</p>";
+        };
+        node.addEventListener("click", activate);
+        node.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
+        });
+      });
+
+      // Component cards
+      const compCopy = {
+        master: "Central coordinator. In-memory metadata, persisted periodically. Chooses replica sets and lease holders.",
+        chunk: "Data plane worker. Local filesystem storage, mutation application, checksum maintenance, GC of garbage handles.",
+        gateway: "Gin HTTP server. Routes REST to HerculesClient methods — never owns storage itself.",
+        detector: "φ Accrual over Redis. Tracks inter-arrival times; Predict() yields suspicion level for logging.",
+        namespace: "Tree of directories/files. Soft-delete renames with ___deleted__ prefix until garbage collection.",
+        buffer: "Temporary map BufferId → bytes. Decouples data push from mutation commit in the write protocol."
+      };
+      const titles = {
+        master: "Master Server", chunk: "Chunkserver", gateway: "Gateway",
+        detector: "Failure Detector", namespace: "Namespace Manager", buffer: "Download Buffer"
+      };
+      const compDetail = document.getElementById("compDetail");
+      document.querySelectorAll("[data-comp]").forEach((card) => {
+        card.addEventListener("click", () => {
+          document.querySelectorAll("[data-comp]").forEach((c) => c.classList.remove("selected"));
+          card.classList.add("selected");
+          const k = card.dataset.comp;
+          compDetail.innerHTML = "<h3>" + titles[k] + "</h3><p class='muted'>" + compCopy[k] + "</p>";
+        });
+      });
+
+      // Generic step animator
+      const animateSteps = (selector, delay) => {
+        clearTimers();
+        const items = Array.from(document.querySelectorAll(selector));
+        items.forEach((el) => el.classList.remove("on"));
+        items.forEach((el, i) => {
+          timers.push(setTimeout(() => el.classList.add("on"), i * delay));
+        });
+      };
+
+      const resetSteps = (selector) => {
+        clearTimers();
+        document.querySelectorAll(selector).forEach((el) => el.classList.remove("on"));
+      };
+
+      document.getElementById("bootPlay").addEventListener("click", () => animateSteps("#bootFlow .card", 450));
+      document.getElementById("bootReset").addEventListener("click", () => resetSteps("#bootFlow .card"));
+
+      document.getElementById("rpcPlay").addEventListener("click", () => animateSteps("#rpcSeq .line", 400));
+      document.getElementById("rpcReset").addEventListener("click", () => resetSteps("#rpcSeq .line"));
+
+      document.getElementById("regPlay").addEventListener("click", () => animateSteps("#regSteps .step", 550));
+      document.getElementById("regReset").addEventListener("click", () => resetSteps("#regSteps .step"));
+
+      document.getElementById("writePlay").addEventListener("click", () => {
+        animateSteps("#writeSteps .step", 500);
+        animateSteps("#writeSeq .line", 500);
+      });
+      document.getElementById("writeReset").addEventListener("click", () => {
+        resetSteps("#writeSteps .step");
+        resetSteps("#writeSeq .line");
+      });
+
+      document.getElementById("repPlay").addEventListener("click", () => animateSteps("#repSteps .step", 550));
+      document.getElementById("repReset").addEventListener("click", () => resetSteps("#repSteps .step"));
+
+      // φ demo — approximate with fixed μ, σ for teaching
+      const mu = 1000; // ms mean inter-arrival
+      const sigma = 200;
+      const slider = document.getElementById("delaySlider");
+      const phiValue = document.getElementById("phiValue");
+      const phiBar = document.getElementById("phiBar");
+      const phiBadge = document.getElementById("phiBadge");
+
+      const erf = (x) => {
+        const sign = x < 0 ? -1 : 1;
+        x = Math.abs(x);
+        const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+        const t = 1 / (1 + p * x);
+        const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+        return sign * y;
+      };
+
+      const updatePhi = () => {
+        const t = Number(slider.value);
+        const z = (t - mu) / sigma;
+        const cdf = 0.5 * (1 + erf(z / Math.SQRT2));
+        let phi = cdf >= 1 ? 20 : -Math.log10(Math.max(1e-15, 1 - cdf));
+        if (!isFinite(phi)) phi = 20;
+        phiValue.textContent = "φ ≈ " + phi.toFixed(2);
+        phiBar.style.width = Math.min(100, (phi / 10) * 100) + "%";
+        if (phi < 1) {
+          phiBadge.className = "badge ok";
+          phiBadge.textContent = "Healthy";
+        } else if (phi < 8) {
+          phiBadge.className = "badge warn";
+          phiBadge.textContent = "Warning";
+        } else {
+          phiBadge.className = "badge alert";
+          phiBadge.textContent = "Likely failed";
+        }
+      };
+      slider.addEventListener("input", updatePhi);
+      updatePhi();
+
+      show(0);
+    })();
+  </script>
+</body>
+</html>
