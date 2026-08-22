@@ -197,7 +197,7 @@ func (ac *ArchiverManager) decompress(path common.Path) (string, error) {
 
 	_, err = io.Copy(decompressedFile, decompressor)
 	if err != nil {
-		ac.fileSystem.RemoveFile(uncompressedFilePath) // Clean up corrupted file, NOT source
+		ac.fileSystem.RemoveFile(uncompressedFilePath)
 		return "", fmt.Errorf("failed to decompress data from %s: %w", path, err)
 	}
 

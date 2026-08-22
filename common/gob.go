@@ -76,7 +76,7 @@ func checkType(t reflect.Type) {
 			field := t.Field(i)
 			rune, _ := utf8.DecodeRuneInString(field.Name)
 			if unicode.IsLower(rune) {
-				fmt.Printf(`gob error: lower-case field %v of %v in RPC or persist/snapshot will break your Raft\n`,
+				fmt.Printf(`gob error: lower-case field %v of %v in RPC or persist/snapshot will break your Code\n`,
 					field.Name, t.Name())
 				mu.Lock()
 				errorCount += 1
@@ -171,4 +171,3 @@ func checkDefaultHelper(value reflect.Value, depth int, name string) {
 	}
 
 }
-

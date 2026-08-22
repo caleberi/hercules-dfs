@@ -1,42 +1,132 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hercules DFS — From TCP to Failure Detection</title>
+  <title>Lessons From Building A Distributed File System &middot; Caleb Adewole</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;0,7..72,700;1,7..72,400&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+    rel="stylesheet" />
+  <script>
+    try {
+      if (localStorage.getItem("hercules-slides-theme") === "light") {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    } catch (e) { }
+  </script>
   <style>
     :root {
-      --ink: #132033;
-      --ink-soft: #3a4a5c;
-      --paper: #f4f7fa;
-      --panel: #ffffff;
-      --line: #c9d4e0;
-      --accent: #0b6e6e;
-      --accent-soft: #d7efef;
-      --warn: #9a5b12;
-      --warn-soft: #f7e8d4;
-      --alert: #8b2e2e;
-      --alert-soft: #f5dede;
-      --master: #1f4b7a;
-      --chunk: #0b6e6e;
-      --client: #5a4a2f;
-      --shadow: 0 12px 40px rgba(19, 32, 51, 0.08);
-      --radius: 14px;
+      --bg: #0a0d14;
+      --panel: #12151f;
+      --panel-alt: #161a26;
+      --line: #232938;
+      --line-soft: #1a2030;
+      --ink: #eef1f7;
+      --ink-soft: #8d97ab;
+      --ink-faint: #5c6579;
+      --accent: #5b8def;
+      --accent-soft: rgba(91, 141, 239, 0.14);
+      --gold: #f0b73f;
+      --warm-a: #c2452f;
+      --warm-b: #6e2038;
+      --warn: #e0a548;
+      --warn-soft: rgba(224, 165, 72, 0.14);
+      --alert: #e2607a;
+      --alert-soft: rgba(226, 96, 122, 0.14);
+      --ok: #3dd68c;
+      --ok-soft: rgba(61, 214, 140, 0.14);
+      --master: #8b7cf6;
+      --chunk: #5b8def;
+      --client: #e0955f;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      --radius: 16px;
+      --glow-1: rgba(91, 141, 239, 0.14);
+      --glow-2: rgba(139, 124, 246, 0.12);
+      --glow-3: rgba(194, 69, 47, 0.08);
+      --nav-bg: rgba(10, 13, 20, 0.86);
+      --code-inline: #bcd2fb;
+      --btn-on-accent: #0a0d14;
+      --progress-track: #1a2030;
+      --chrome-bg: rgba(18, 21, 31, 0.72);
+      --rm-mile-bg: #ffe566;
+      --rm-node-bg: #fff3cc;
+      --rm-ink: #141824;
+      --rm-line: #141824;
+      --syn-bg: #080b12;
+      --syn-fg: #d7e0ee;
+      --syn-comment: #5d6880;
+      --syn-keyword: #8bb4ff;
+      --syn-fn: #c4b5fd;
+      --syn-type: #7dd3c7;
+      --syn-str: #f0b73f;
+      --syn-num: #e0955f;
+      --syn-const: #e2607a;
+      --syn-pkg: #8d97ab;
+      --syn-prop: #bcd2fb;
+      --syn-op: #6e7890;
+      --syn-gutter: #3c4558;
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f3f5fa;
+      --panel: #ffffff;
+      --panel-alt: #eef2f8;
+      --line: #d5dce8;
+      --line-soft: #e7ecf4;
+      --ink: #141824;
+      --ink-soft: #4b5568;
+      --ink-faint: #7a8496;
+      --accent: #3b6fd4;
+      --accent-soft: rgba(59, 111, 212, 0.12);
+      --gold: #d99212;
+      --shadow: 0 16px 44px rgba(28, 40, 70, 0.1);
+      --glow-1: rgba(91, 141, 239, 0.18);
+      --glow-2: rgba(139, 124, 246, 0.12);
+      --glow-3: rgba(194, 69, 47, 0.08);
+      --nav-bg: rgba(255, 255, 255, 0.9);
+      --code-inline: #2f5db8;
+      --btn-on-accent: #ffffff;
+      --progress-track: #d5dce8;
+      --chrome-bg: rgba(255, 255, 255, 0.78);
+      --syn-bg: #f7f9fc;
+      --syn-fg: #1f2937;
+      --syn-comment: #7b8494;
+      --syn-keyword: #2f5db8;
+      --syn-fn: #6d4ee6;
+      --syn-type: #0f766e;
+      --syn-str: #b45309;
+      --syn-num: #c2410c;
+      --syn-const: #be123c;
+      --syn-pkg: #64748b;
+      --syn-prop: #334155;
+      --syn-op: #94a3b8;
+      --syn-gutter: #c5ccd8;
+    }
 
-    html, body {
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      color-scheme: dark;
+    }
+
+    html,
+    body {
       height: 100%;
       background:
-        radial-gradient(1200px 600px at 10% -10%, #d9e7f2 0%, transparent 55%),
-        radial-gradient(900px 500px at 100% 0%, #d7efef 0%, transparent 45%),
-        linear-gradient(160deg, #eef3f7 0%, #e6edf4 48%, #e9f1f0 100%);
+        radial-gradient(1100px 600px at 8% -8%, var(--glow-1) 0%, transparent 55%),
+        radial-gradient(900px 520px at 102% 6%, var(--glow-2) 0%, transparent 50%),
+        radial-gradient(700px 500px at 60% 110%, var(--glow-3) 0%, transparent 55%),
+        var(--bg);
       color: var(--ink);
-      font-family: "Source Sans 3", system-ui, sans-serif;
+      font-family: "Inter", system-ui, sans-serif;
       overflow: hidden;
     }
 
@@ -50,10 +140,10 @@
       position: absolute;
       inset: 0;
       display: none;
-      padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1.25rem, 4vw, 3.5rem) 4.5rem;
+      padding: clamp(1.1rem, 2.6vw, 2.5rem) clamp(1.1rem, 4vw, 3.75rem) 4.75rem;
       opacity: 0;
       transform: translateY(10px);
-      transition: opacity 0.35s ease, transform 0.35s ease;
+      transition: opacity .35s ease, transform .35s ease;
     }
 
     .slide.active {
@@ -63,62 +153,221 @@
       transform: translateY(0);
     }
 
-    .slide.exit {
-      display: flex;
-      opacity: 0;
-      transform: translateY(-8px);
-    }
-
-    h1, h2, h3 {
-      font-family: Literata, Georgia, serif;
-      font-weight: 700;
+    h1,
+    h2,
+    h3 {
+      font-family: "Bricolage Grotesque", system-ui, sans-serif;
       letter-spacing: -0.02em;
-      line-height: 1.15;
+      line-height: 1.1;
+      color: var(--ink);
     }
 
-    h1 { font-size: clamp(2rem, 4.5vw, 3.4rem); }
-    h2 { font-size: clamp(1.55rem, 3vw, 2.35rem); margin-bottom: 0.75rem; }
-    h3 { font-size: 1.15rem; margin-bottom: 0.4rem; }
+    h1 {
+      font-weight: 700;
+      font-size: clamp(2rem, 4.4vw, 3.4rem);
+    }
 
-    p, li { color: var(--ink-soft); line-height: 1.55; }
-    .lede { font-size: 1.1rem; max-width: 46rem; }
+    h2 {
+      font-weight: 700;
+      font-size: clamp(1.4rem, 2.6vw, 2.1rem);
+      margin-bottom: .6rem;
+    }
+
+    h3 {
+      font-weight: 600;
+      font-size: 1.05rem;
+      margin-bottom: .35rem;
+    }
+
+    p,
+    li {
+      color: var(--ink-soft);
+      line-height: 1.58;
+    }
+
+    .lede {
+      font-size: 1.05rem;
+      max-width: 46rem;
+    }
+
+    code {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: var(--accent-soft);
+      color: var(--code-inline);
+      padding: .05rem .35rem;
+      border-radius: 5px;
+      font-size: .86em;
+    }
 
     .eyebrow {
-      display: inline-block;
-      font-size: 0.78rem;
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      font-size: .74rem;
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: .14em;
       text-transform: uppercase;
       color: var(--accent);
-      margin-bottom: 0.75rem;
+      margin-bottom: .6rem;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: .4rem;
+      height: .4rem;
+      border-radius: 50%;
+      background: var(--gold);
+      box-shadow: 0 0 0 3px rgba(240, 183, 63, 0.18);
     }
 
     .title-slide {
       justify-content: center;
-      gap: 1.25rem;
-      max-width: 56rem;
+      gap: 1.05rem;
+      max-width: 60rem;
+    }
+
+    .schedule-bar {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      flex-wrap: wrap;
+      font-size: .85rem;
+      color: var(--ink-soft);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: .5rem .85rem;
+      border-radius: 999px;
+      width: fit-content;
+    }
+
+    .schedule-bar strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .dot-sep {
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: var(--ink-faint);
     }
 
     .title-meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.6rem;
-      margin-top: 0.5rem;
+      gap: .5rem;
+      margin-top: .4rem;
     }
 
     .chip {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.7);
+      background: var(--panel);
       border-radius: 999px;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.85rem;
+      padding: .4rem .8rem;
+      font-size: .82rem;
       color: var(--ink-soft);
+    }
+
+    .chip.link {
+      color: var(--accent);
+      text-decoration: none;
+      border-color: rgba(91, 141, 239, 0.35);
+    }
+
+    .fn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .7rem;
+      margin-top: .55rem;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .fn-grid .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: .85rem 1rem;
+    }
+
+    .fn-grid h3 {
+      font-size: .98rem;
+      margin-bottom: .2rem;
+    }
+
+    .fn-tag {
+      display: inline-block;
+      font-size: .64rem;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      font-weight: 700;
+      padding: .18rem .5rem;
+      border-radius: 999px;
+      margin-bottom: .4rem;
+      width: fit-content;
+    }
+
+    .fn-tag.bug {
+      background: var(--alert-soft);
+      color: var(--alert);
+    }
+
+    .fn-tag.reversal {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+
+    .fn-tag.lesson {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .fn-fix,
+    .fn-next {
+      font-size: .8rem;
+      line-height: 1.45;
+      margin-top: .4rem;
+      padding: .4rem .55rem;
+      border-radius: 0 8px 8px 0;
+    }
+
+    .fn-fix {
+      border-left: 3px solid var(--ok);
+      background: var(--ok-soft);
+      color: var(--ink-soft);
+    }
+
+    .fn-next {
+      border-left: 3px solid var(--warn);
+      background: var(--warn-soft);
+      color: var(--ink-soft);
+    }
+
+    .fn-fix strong,
+    .fn-next strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .fn-q {
+      margin-top: auto;
+      padding-top: .45rem;
+      border-top: 1px solid var(--line);
+      font-size: .78rem;
+      line-height: 1.4;
+      color: var(--ink);
+    }
+
+    .fn-q::before {
+      content: "Q. ";
+      color: var(--gold);
+      font-weight: 700;
     }
 
     .grid-2 {
       display: grid;
-      grid-template-columns: 1.1fr 0.9fr;
-      gap: 1.25rem;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 1.1rem;
       flex: 1;
       min-height: 0;
       align-items: stretch;
@@ -127,8 +376,8 @@
     .grid-3 {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
-      margin-top: 1rem;
+      gap: .9rem;
+      margin-top: .9rem;
     }
 
     .card {
@@ -141,402 +390,50 @@
 
     .card.interactive {
       cursor: pointer;
-      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
     }
 
     .card.interactive:hover,
     .card.interactive.selected {
       transform: translateY(-2px);
       border-color: var(--accent);
-      box-shadow: 0 16px 36px rgba(11, 110, 110, 0.12);
+      box-shadow: 0 18px 44px rgba(91, 141, 239, 0.16);
     }
 
-    .muted { color: var(--ink-soft); font-size: 0.95rem; }
+    .muted {
+      color: var(--ink-soft);
+      font-size: .92rem;
+    }
 
     .kpi {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
-      gap: 0.75rem;
-      margin-top: 1rem;
+      gap: .7rem;
+      margin-top: .9rem;
     }
 
-    .kpi .card { text-align: center; padding: 0.9rem 0.6rem; }
+    .kpi .card {
+      text-align: center;
+      padding: .85rem .55rem;
+    }
+
     .kpi strong {
       display: block;
-      font-family: Literata, Georgia, serif;
-      font-size: 1.35rem;
+      font-family: "Bricolage Grotesque", serif;
+      font-size: 1.3rem;
       color: var(--ink);
     }
-    .kpi span { font-size: 0.82rem; }
 
-    .arch {
-      display: grid;
-      grid-template-rows: auto auto auto;
-      gap: 0.85rem;
-      place-items: center;
-      height: 100%;
-    }
-
-    .node {
-      min-width: 10rem;
-      text-align: center;
-      padding: 0.85rem 1rem;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      background: #fff;
-      box-shadow: var(--shadow);
-      cursor: pointer;
-      transition: transform 0.2s ease, outline 0.2s ease;
-      outline: 2px solid transparent;
-    }
-
-    .node:hover, .node.active {
-      transform: scale(1.03);
-      outline-color: var(--accent);
-    }
-
-    .node .role {
-      font-size: 0.72rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      font-weight: 700;
-      margin-bottom: 0.2rem;
-    }
-
-    .node.client { border-top: 4px solid var(--client); }
-    .node.master { border-top: 4px solid var(--master); }
-    .node.chunk { border-top: 4px solid var(--chunk); }
-
-    .chunk-row {
-      display: flex;
-      gap: 0.6rem;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-
-    .arrow-label {
-      font-size: 0.8rem;
+    .kpi span {
+      font-size: .78rem;
       color: var(--ink-soft);
-      text-align: center;
-    }
-
-    .detail-pane {
-      min-height: 8rem;
-      background: var(--accent-soft);
-      border: 1px solid #b7dede;
-      border-radius: var(--radius);
-      padding: 1rem 1.1rem;
-    }
-
-    .detail-pane h3 { color: var(--accent); }
-
-    .steps {
-      display: flex;
-      flex-direction: column;
-      gap: 0.55rem;
-      margin-top: 0.75rem;
-    }
-
-    .step {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 0.75rem;
-      align-items: start;
-      padding: 0.7rem 0.85rem;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      background: rgba(255,255,255,0.55);
-      opacity: 0.45;
-      transition: opacity 0.25s ease, border-color 0.25s ease, background 0.25s ease;
-    }
-
-    .step.on {
-      opacity: 1;
-      border-color: var(--accent);
-      background: #fff;
-    }
-
-    .step-num {
-      width: 1.6rem;
-      height: 1.6rem;
-      border-radius: 50%;
-      display: grid;
-      place-items: center;
-      background: var(--accent);
-      color: #fff;
-      font-size: 0.8rem;
-      font-weight: 700;
-      flex-shrink: 0;
-    }
-
-    .controls-inline {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-      margin-top: 0.85rem;
-    }
-
-    button {
-      font-family: inherit;
-      font-weight: 600;
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--ink);
-      border-radius: 999px;
-      padding: 0.45rem 0.9rem;
-      cursor: pointer;
-      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-    }
-
-    button:hover { border-color: var(--accent); color: var(--accent); }
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    button.primary:hover { background: #095959; }
-
-    .flow {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 0.5rem;
-      margin-top: 1rem;
-    }
-
-    .flow .card {
-      text-align: center;
-      padding: 0.8rem 0.5rem;
-      position: relative;
-      opacity: 0.35;
-      transform: translateY(6px);
-      transition: opacity 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
-    }
-
-    .flow .card.on {
-      opacity: 1;
-      transform: translateY(0);
-      border-color: var(--accent);
-    }
-
-    .flow .card .n {
-      display: inline-grid;
-      place-items: center;
-      width: 1.4rem;
-      height: 1.4rem;
-      border-radius: 50%;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 0.75rem;
-      font-weight: 700;
-      margin-bottom: 0.35rem;
-    }
-
-    .seq {
-      display: flex;
-      flex-direction: column;
-      gap: 0.45rem;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.82rem;
-      background: #132033;
-      color: #d7e3ef;
-      border-radius: var(--radius);
-      padding: 1rem;
-      min-height: 14rem;
-      overflow: auto;
-    }
-
-    .seq .line {
-      opacity: 0.25;
-      transition: opacity 0.25s ease, color 0.25s ease;
-      white-space: nowrap;
-    }
-
-    .seq .line.on {
-      opacity: 1;
-      color: #9fe7d8;
-    }
-
-    .seq .line.dim { color: #8aa0b5; }
-
-    .params {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 0.75rem;
-      background: #fff;
-      border-radius: var(--radius);
-      overflow: hidden;
-      box-shadow: var(--shadow);
-    }
-
-    .params th, .params td {
-      text-align: left;
-      padding: 0.7rem 0.9rem;
-      border-bottom: 1px solid var(--line);
-      font-size: 0.95rem;
-    }
-
-    .params th {
-      background: #e8eef4;
-      font-weight: 700;
-      color: var(--ink);
-    }
-
-    .params tr:last-child td { border-bottom: 0; }
-
-    .phi-lab {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-top: 0.75rem;
-    }
-
-    .meter {
-      height: 0.7rem;
-      background: #dfe7ef;
-      border-radius: 999px;
-      overflow: hidden;
-      margin: 0.75rem 0 0.4rem;
-    }
-
-    .meter > span {
-      display: block;
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent), #9a5b12, var(--alert));
-      transition: width 0.35s ease;
-    }
-
-    .phi-value {
-      font-family: Literata, Georgia, serif;
-      font-size: 2.4rem;
-      color: var(--ink);
-    }
-
-    .badge {
-      display: inline-block;
-      border-radius: 999px;
-      padding: 0.25rem 0.65rem;
-      font-size: 0.8rem;
-      font-weight: 700;
-    }
-
-    .badge.ok { background: var(--accent-soft); color: var(--accent); }
-    .badge.warn { background: var(--warn-soft); color: var(--warn); }
-    .badge.alert { background: var(--alert-soft); color: var(--alert); }
-
-    .timeline {
-      position: relative;
-      margin-top: 1rem;
-      padding-left: 1.25rem;
-    }
-
-    .timeline::before {
-      content: "";
-      position: absolute;
-      left: 0.35rem;
-      top: 0.2rem;
-      bottom: 0.2rem;
-      width: 2px;
-      background: var(--line);
-    }
-
-    .t-item {
-      position: relative;
-      margin-bottom: 0.85rem;
-      padding-left: 0.5rem;
-    }
-
-    .t-item::before {
-      content: "";
-      position: absolute;
-      left: -1.05rem;
-      top: 0.45rem;
-      width: 0.65rem;
-      height: 0.65rem;
-      border-radius: 50%;
-      background: var(--accent);
-      border: 2px solid #fff;
-      box-shadow: 0 0 0 1px var(--accent);
-    }
-
-    .t-item strong { color: var(--ink); }
-
-    .nav {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.75rem 1.25rem 0.9rem;
-      background: rgba(244, 247, 250, 0.88);
-      backdrop-filter: blur(10px);
-      border-top: 1px solid var(--line);
-      z-index: 20;
-    }
-
-    .progress {
-      flex: 1;
-      height: 4px;
-      background: #d5dee8;
-      border-radius: 999px;
-      overflow: hidden;
-      max-width: 28rem;
-    }
-
-    .progress > span {
-      display: block;
-      height: 100%;
-      width: 0%;
-      background: var(--accent);
-      transition: width 0.25s ease;
-    }
-
-    .nav-left, .nav-right {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      min-width: 9rem;
-    }
-
-    .nav-right { justify-content: flex-end; }
-
-    .slide-count {
-      font-size: 0.85rem;
-      color: var(--ink-soft);
-      min-width: 4.5rem;
-      text-align: center;
-    }
-
-    .toc {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 0.55rem;
-      margin-top: 1rem;
-    }
-
-    .toc button {
-      text-align: left;
-      border-radius: 10px;
-      padding: 0.7rem 0.85rem;
-    }
-
-    .toc button span {
-      display: block;
-      font-size: 0.75rem;
-      color: var(--accent);
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
     }
 
     .two-col-list {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 0.75rem 1.25rem;
-      margin-top: 0.75rem;
+      gap: .65rem 1.15rem;
+      margin-top: .65rem;
     }
 
     .two-col-list li {
@@ -549,493 +446,2019 @@
       content: "";
       position: absolute;
       left: 0;
-      top: 0.55rem;
-      width: 0.4rem;
-      height: 0.4rem;
+      top: .55rem;
+      width: .4rem;
+      height: .4rem;
       border-radius: 50%;
       background: var(--accent);
     }
 
     .note {
       margin-top: auto;
-      padding-top: 0.75rem;
-      font-size: 0.85rem;
-      color: var(--ink-soft);
+      padding-top: .65rem;
+      font-size: .82rem;
+      color: var(--ink-faint);
     }
 
     .callout {
-      margin-top: 0.85rem;
-      padding: 0.75rem 0.9rem;
+      margin-top: .75rem;
+      padding: .7rem .85rem;
       border-left: 3px solid var(--accent);
-      background: rgba(255,255,255,0.65);
+      background: rgba(91, 141, 239, 0.06);
       border-radius: 0 10px 10px 0;
-      font-size: 0.95rem;
+      font-size: .92rem;
     }
 
-    @media (max-width: 900px) {
-      .grid-2, .phi-lab, .toc, .two-col-list { grid-template-columns: 1fr; }
-      .grid-3, .kpi, .flow { grid-template-columns: 1fr 1fr; }
-      .slide { padding-bottom: 5.5rem; overflow: auto; }
-      body { overflow: auto; }
-      .nav-left, .nav-right { min-width: auto; }
-      .progress { display: none; }
+    .callout.warm {
+      border-left-color: var(--warm-a);
+      background: rgba(194, 69, 47, 0.08);
     }
 
-    @media (max-width: 560px) {
-      .grid-3, .kpi, .flow { grid-template-columns: 1fr; }
+    a {
+      color: var(--accent);
+    }
+
+    .roadmap {
+      position: relative;
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      margin-top: .35rem;
+      align-items: stretch;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .roadmap::before {
+      content: "";
+      position: absolute;
+      left: 1.5%;
+      right: 1.5%;
+      top: 50%;
+      height: 3px;
+      background: var(--accent);
+      border-radius: 999px;
+      z-index: 0;
+    }
+
+    .rm-col {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 8.6rem;
+    }
+
+    .rm-col.has-up::before,
+    .rm-col.has-down::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      width: 0;
+      border-left: 2px dotted var(--accent);
+      z-index: 0;
+    }
+
+    .rm-col.has-up::before {
+      top: 7%;
+      bottom: 50%;
+    }
+
+    .rm-col.has-down::after {
+      top: 50%;
+      bottom: 7%;
+    }
+
+    .rm-up,
+    .rm-down {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: .45rem;
+      padding: 0 .3rem;
+      z-index: 1;
+    }
+
+    .rm-up {
+      justify-content: flex-end;
+      padding-bottom: .7rem;
+    }
+
+    .rm-down {
+      justify-content: flex-start;
+      padding-top: .7rem;
+    }
+
+    .rm-mile,
+    .rm-node {
+      position: relative;
+      z-index: 2;
+      color: var(--rm-ink);
+      border: 2px solid var(--rm-line);
+      border-radius: 6px;
+      font-weight: 700;
+      text-align: center;
+      cursor: pointer;
+      transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+
+    .rm-mile {
+      flex-shrink: 0;
+      background: var(--rm-mile-bg);
+      padding: .42rem .75rem;
+      font-family: "Bricolage Grotesque", system-ui, sans-serif;
+      font-size: .9rem;
+      white-space: nowrap;
+      box-shadow: 3px 3px 0 var(--rm-line);
+    }
+
+    .rm-node {
+      width: calc(100% - .35rem);
+      max-width: 11.6rem;
+      background: var(--rm-node-bg);
+      padding: .4rem .5rem;
+      font-size: .78rem;
+      line-height: 1.25;
+      box-shadow: 2px 2px 0 var(--rm-line);
+    }
+
+    .rm-node span {
+      display: block;
+      font-size: .6rem;
+      color: #6a5416;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      margin-bottom: .12rem;
+    }
+
+    .rm-mile:hover,
+    .rm-node:hover {
+      transform: translate(-1px, -1px);
+      background: #fffdf3;
+      border-color: var(--rm-line);
+      color: var(--rm-ink);
+      box-shadow: 4px 4px 0 var(--rm-line);
+    }
+
+    .paper-source,
+    .borrow-card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .paper-fig {
+      margin-top: .7rem;
+      flex: 1;
+      min-height: 8rem;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: .55rem .7rem;
+    }
+
+    .paper-fig img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .borrow-card {
+      position: relative;
+    }
+
+    .borrow-copy {
+      position: relative;
+      z-index: 1;
+      padding-bottom: 7rem;
+    }
+
+    .borrow-shot {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 135%;
+      max-width: 36rem;
+      transform-origin: left bottom;
+      transform: rotate(45deg);
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      opacity: 1;
+      pointer-events: none;
+    }
+
+    .theme-toggle {
+      width: 2.35rem;
+      height: 2.35rem;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+    }
+
+    .theme-toggle svg {
+      width: 1.05rem;
+      height: 1.05rem;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    html[data-theme="dark"] .theme-toggle .icon-moon,
+    html[data-theme="light"] .theme-toggle .icon-sun {
+      display: none;
+    }
+
+    .gopher {
+      position: fixed;
+      z-index: 12;
+      width: 128px;
+      height: 142px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .4s ease, transform .55s cubic-bezier(.22, 1.15, .36, 1);
+    }
+
+    .gopher svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.35));
+    }
+
+    .gopher-bob {
+      width: 100%;
+      height: 100%;
+    }
+
+    .gopher.is-in .gopher-bob {
+      animation: gopher-bob 2.6s ease-in-out infinite;
+    }
+
+    .gopher.corner-br {
+      right: -22px;
+      bottom: 42px;
+      transform: translate(28px, 36px) rotate(-10deg);
+    }
+
+    .gopher.corner-br.is-in {
+      opacity: 1;
+      transform: translate(6px, 16px) rotate(-8deg);
+    }
+
+    .gopher.corner-bl {
+      left: -22px;
+      bottom: 42px;
+      transform: translate(-28px, 36px) scaleX(-1) rotate(-10deg);
+    }
+
+    .gopher.corner-bl.is-in {
+      opacity: 1;
+      transform: translate(-6px, 16px) scaleX(-1) rotate(-8deg);
+    }
+
+    .gopher.corner-tr {
+      right: 10px;
+      top: -18px;
+      transform: translate(24px, -36px) rotate(170deg);
+    }
+
+    .gopher.corner-tr.is-in {
+      opacity: 1;
+      transform: translate(4px, -8px) rotate(174deg);
+    }
+
+    .gopher.corner-tl {
+      left: 10px;
+      top: -18px;
+      transform: translate(-24px, -36px) scaleX(-1) rotate(170deg);
+    }
+
+    .gopher.corner-tl.is-in {
+      opacity: 1;
+      transform: translate(-4px, -8px) scaleX(-1) rotate(174deg);
+    }
+
+    @keyframes gopher-bob {
+
+      0%,
+      100% {
+        transform: translateY(0);
+      }
+
+      50% {
+        transform: translateY(-7px);
+      }
+    }
+
+    button {
+      font-family: "Inter", inherit;
+      font-weight: 600;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: .42rem .85rem;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, color .15s ease;
+      font-size: .85rem;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    button.rm-mile:hover,
+    button.rm-node:hover {
+      transform: translate(-1px, -1px);
+      background: #fffdf3;
+      border-color: var(--rm-line);
+      color: var(--rm-ink);
+      box-shadow: 4px 4px 0 var(--rm-line);
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--btn-on-accent);
+    }
+
+    button.primary:hover {
+      background: #7aa3f2;
+      color: var(--btn-on-accent);
+    }
+
+    /* code panel system */
+    .code-wrap {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+    }
+
+    .code-tabs {
+      display: flex;
+      gap: .4rem;
+      flex-wrap: wrap;
+      margin-bottom: .55rem;
+    }
+
+    .code-tab {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink-soft);
+      border-radius: 9px;
+      padding: .5rem .7rem;
+      font-size: .78rem;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .15s ease, color .15s ease, background .15s ease;
+    }
+
+    .code-tab .src {
+      display: block;
+      font-size: .66rem;
+      color: var(--ink-faint);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      margin-top: .15rem;
+    }
+
+    .code-tab:hover {
+      border-color: var(--accent);
+      color: var(--ink);
+    }
+
+    .code-tab.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    .code-view {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      background:
+        linear-gradient(180deg, rgba(91, 141, 239, 0.05) 0%, transparent 28%),
+        var(--syn-bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .code-chrome {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      flex-shrink: 0;
+      padding: .55rem .85rem;
+      border-bottom: 1px solid var(--line);
+      background: var(--chrome-bg);
+    }
+
+    .code-dots {
+      display: flex;
+      gap: 5px;
+      flex-shrink: 0;
+    }
+
+    .code-dots i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: block;
+    }
+
+    .code-dots i:nth-child(1) {
+      background: #e2607a;
+    }
+
+    .code-dots i:nth-child(2) {
+      background: #f0b73f;
+    }
+
+    .code-dots i:nth-child(3) {
+      background: #3dd68c;
+    }
+
+    .code-file {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: .7rem;
+      color: var(--ink-soft);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .code-lang {
+      margin-left: auto;
+      flex-shrink: 0;
+      font-size: .62rem;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid rgba(91, 141, 239, 0.28);
+      padding: .14rem .48rem;
+      border-radius: 999px;
+    }
+
+    .code-block {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      margin: 0;
+      padding: .55rem 0 .75rem;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .74rem;
+      font-weight: 400;
+      line-height: 1.62;
+      color: var(--syn-fg);
+      white-space: normal;
+      tab-size: 2;
+      -moz-tab-size: 2;
+      scrollbar-color: #2a3348 transparent;
+    }
+
+    .code-block ::selection,
+    .code-block ::-moz-selection {
+      background: rgba(91, 141, 239, 0.35);
+      color: var(--ink);
+    }
+
+    .code-block.active {
+      display: block;
+    }
+
+    .code-view:not(.is-ready) .code-block {
+      opacity: 0;
+    }
+
+    .code-block code {
+      display: block;
+      background: none;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
+      font-size: inherit;
+      font-family: inherit;
+      font-weight: inherit;
+    }
+
+    .code-block .cl {
+      display: grid;
+      grid-template-columns: 2.85rem minmax(0, 1fr);
+    }
+
+    .code-block .cl:hover .lc {
+      background: rgba(91, 141, 239, 0.07);
+    }
+
+    .code-block .ln {
+      color: var(--syn-gutter);
+      text-align: right;
+      padding: 0 .7rem 0 .35rem;
+      border-right: 1px solid var(--line-soft);
+      user-select: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .code-block .lc {
+      padding: 0 .95rem 0 .8rem;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      min-width: 0;
+    }
+
+    .code-block .tok-kw {
+      color: var(--syn-keyword);
+      font-weight: 600;
+    }
+
+    .code-block .tok-fn {
+      color: var(--syn-fn);
+    }
+
+    .code-block .tok-type {
+      color: var(--syn-type);
+    }
+
+    .code-block .tok-str {
+      color: var(--syn-str);
+    }
+
+    .code-block .tok-num {
+      color: var(--syn-num);
+    }
+
+    .code-block .tok-const {
+      color: var(--syn-const);
+    }
+
+    .code-block .tok-builtin {
+      color: var(--syn-const);
+    }
+
+    .code-block .tok-pkg {
+      color: var(--syn-pkg);
+      font-style: italic;
+    }
+
+    .code-block .tok-prop {
+      color: var(--syn-prop);
+    }
+
+    .code-block .tok-cmt {
+      color: var(--syn-comment);
+      font-style: italic;
+    }
+
+    .code-block .tok-op {
+      color: var(--syn-op);
+    }
+
+    .code-block::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    .code-block::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .code-block::-webkit-scrollbar-thumb {
+      background: #2a3348;
+      border-radius: 999px;
+    }
+
+    .code-caption {
+      font-size: .72rem;
+      color: var(--ink-faint);
+      padding: .5rem .9rem;
+      border-top: 1px solid var(--line);
+      background: var(--panel-alt);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    .hero-video-wrap {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 1.1rem;
+      flex: 1;
+      min-height: 0;
+      align-items: center;
+    }
+
+    .video-frame {
+      position: relative;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      background: #000;
+      aspect-ratio: 16/10;
+    }
+
+    .video-frame video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .video-frame .tag {
+      position: absolute;
+      top: .7rem;
+      left: .7rem;
+      background: rgba(10, 13, 20, 0.7);
+      border: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-size: .7rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      padding: .28rem .55rem;
+      border-radius: 999px;
+      backdrop-filter: blur(6px);
+    }
+
+    .pass {
+      display: grid;
+      grid-template-columns: 2.4rem 1fr;
+      gap: .8rem;
+      align-items: start;
+      padding: .85rem;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      margin-bottom: .65rem;
+    }
+
+    .pass .pnum {
+      width: 2.4rem;
+      height: 2.4rem;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      display: grid;
+      place-items: center;
+      font-family: "Bricolage Grotesque", serif;
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+
+    .pass h3 {
+      margin-bottom: .15rem;
+    }
+
+    .dep-row {
+      display: flex;
+      gap: .5rem;
+      flex-wrap: wrap;
+      margin-top: .7rem;
+    }
+
+    .dep {
+      border: 1px solid var(--line);
+      background: var(--panel-alt);
+      border-radius: 8px;
+      padding: .4rem .65rem;
+      font-size: .76rem;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      color: var(--ink-soft);
+    }
+
+    .dep b {
+      color: var(--accent);
+    }
+
+    .nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: .7rem 1.15rem .85rem;
+      background: var(--nav-bg);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid var(--line);
+      z-index: 20;
+    }
+
+    .progress {
+      flex: 1;
+      height: 4px;
+      background: var(--progress-track);
+      border-radius: 999px;
+      overflow: hidden;
+      max-width: 28rem;
+    }
+
+    .progress>span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width .25s ease;
+    }
+
+    .nav-left,
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      min-width: 9rem;
+    }
+
+    .nav-right {
+      justify-content: flex-end;
+    }
+
+    .slide-count {
+      font-size: .82rem;
+      color: var(--ink-faint);
+      min-width: 4.5rem;
+      text-align: center;
+    }
+
+    @media (max-width:900px) {
+
+      .fn-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .roadmap {
+        min-height: 26rem;
+      }
+
+      .grid-3,
+      .kpi {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .slide {
+        padding-bottom: 5.5rem;
+        overflow: auto;
+      }
+
+      body {
+        overflow: auto;
+      }
+
+      .nav-left,
+      .nav-right {
+        min-width: auto;
+      }
+
+      .progress {
+        display: none;
+      }
+
+      .code-view {
+        min-height: 16rem;
+      }
+    }
+
+    @media (max-width:560px) {
+
+      .grid-3,
+      .kpi {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
+
 <body>
   <div class="deck" id="deck" aria-live="polite">
 
-    <!-- 0 -->
     <section class="slide title-slide active" data-title="Title">
-      <div class="eyebrow">Academic Lecture · Distributed Systems</div>
-      <h1>Hercules Distributed File System</h1>
-      <p class="lede">
-        An interactive walkthrough of how Hercules works — from TCP connection
-        establishment, through master–chunkserver delegation, to failure detection
-        and self-healing replication.
-      </p>
-      <div class="title-meta">
-        <span class="chip">GFS-inspired architecture</span>
-        <span class="chip">Go · net/rpc over TCP</span>
-        <span class="chip">φ Accrual failure detection</span>
+      <div class="schedule-bar"><strong>10:00 – 10:30 AM</strong><span class="dot-sep"></span>Second talk<span
+          class="dot-sep"></span>Gophers Nigeria Meetup</div>
+      <div class="eyebrow">Distributed Systems · Go</div>
+      <h1>Lessons From Building A Distributed File System</h1>
+      <p class="lede">A field report from building Hercules — a Go implementation of the Google File System design.
+        Master&ndash;chunkserver architecture, 64&nbsp;MB chunks, lease-based mutations, an HTTP gateway, and every bug
+        that came with turning a research paper into running code.</p>
+      <div class="hero-video-wrap" style="flex:none; margin-top:.4rem;">
+        <div class="video-frame">
+          <span class="tag">&#9679; Hercules in action</span>
+          <video controls muted loop playsinline preload="metadata">
+            <source src="https://github.com/user-attachments/assets/faf3553a-ace8-402b-8e81-9515685d9ad6"
+              type="video/mp4" />
+            Your browser can't play this video inline &mdash; open it directly on GitHub instead.
+          </video>
+        </div>
+        <div>
+          <div class="title-meta">
+            <span class="chip">GFS-inspired architecture</span>
+            <span class="chip">Go &middot; net/rpc over TCP</span>
+            <span class="chip">&phi; Accrual failure detection</span>
+            <span class="chip">Lease-based writes</span>
+          </div>
+          <p class="muted" style="margin-top:.7rem;">Speaker: <strong style="color:var(--ink)">Caleb Erioluwa
+              Adewole</strong></p>
+          <a class="chip link" href="https://github.com/caleberi/hercules-dfs"
+            style="margin-top:.55rem; display:inline-block;">github.com/caleberi/hercules-dfs &rarr;</a>
+        </div>
       </div>
-      <p class="note">Use ← → or click Next. Press <strong>T</strong> for outline.</p>
+      <p class="note">Use &larr; &rarr; or click Next. Press <strong>T</strong> for outline, <strong>D</strong> for
+        theme. Click a code tab to switch snippets.</p>
     </section>
 
-    <!-- 1 -->
-    <section class="slide" data-title="Learning path">
+    <section class="slide" data-title="Roadmap">
       <div class="eyebrow">Roadmap</div>
-      <h2>What we will learn</h2>
-      <p class="lede">Follow the system in the same order a request travels through it.</p>
-      <div class="toc" id="toc"></div>
+      <h2>How this talk is laid out</h2>
+      <p class="lede">Ten stops: the paper, the reading method, the language choice, the two server types, locking,
+        failure detection, integrity, the SDK, then the wrap-up. Every code slide is pulled live from
+        <code>github.com/caleberi/hercules-dfs</code>.
+      </p>
+      <div class="roadmap" id="toc"></div>
     </section>
 
-    <!-- 2 -->
-    <section class="slide" data-title="Big picture">
-      <div class="eyebrow">Architecture</div>
-      <h2>One master, many chunkservers</h2>
+    <section class="slide" data-title="The paper">
+      <div class="eyebrow">01 &middot; Source material</div>
+      <h2>The paper: The Google File System</h2>
       <div class="grid-2">
-        <div class="arch" id="archDiagram">
-          <div class="node client" data-role="client" tabindex="0">
-            <div class="role">Client path</div>
-            <strong>Gateway / SDK</strong>
-            <div class="muted">HTTP or Go client</div>
-          </div>
-          <div class="arrow-label">① ask metadata · ② receive locations</div>
-          <div class="node master" data-role="master" tabindex="0">
-            <div class="role">Control plane</div>
-            <strong>Master Server</strong>
-            <div class="muted">Namespace · leases · placement</div>
-          </div>
-          <div class="arrow-label">③ read / write data directly</div>
-          <div class="chunk-row">
-            <div class="node chunk" data-role="chunk" tabindex="0">
-              <div class="role">Data plane</div>
-              <strong>CS-1</strong>
-            </div>
-            <div class="node chunk" data-role="chunk" tabindex="0">
-              <div class="role">Data plane</div>
-              <strong>CS-2</strong>
-            </div>
-            <div class="node chunk" data-role="chunk" tabindex="0">
-              <div class="role">Data plane</div>
-              <strong>CS-3</strong>
-            </div>
-          </div>
+        <div class="card paper-source">
+          <h3>Ghemawat, Gobioff &amp; Leung &middot; SOSP 2003</h3>
+          <p class="muted">GFS was built for Google's own workloads: huge files, mostly-append writes, commodity
+            hardware that fails routinely, and a small number of large streaming reads rather than millions of small
+            random ones.</p>
+          <p class="muted" style="margin-top:.6rem;">Its central bet: push complexity into a single logical master for
+            metadata, and keep chunkservers dumb, replicated, and easy to replace. Failure is treated as the normal
+            case, not the exception.</p>
+          <figure class="paper-fig">
+            <img src="assets/gfs-architecture.png" alt="Figure 1: GFS Architecture from the Google File System paper" />
+          </figure>
         </div>
-        <div>
-          <div class="detail-pane" id="archDetail">
-            <h3>Click a component</h3>
-            <p class="muted">Explore each role. Metadata stays on the master; bytes live on chunkservers.</p>
+        <div class="card borrow-card">
+          <div class="borrow-copy">
+            <h3>What Hercules borrows</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li>Single master, many chunkservers</li>
+              <li>Large fixed-size chunks (64&nbsp;MB)</li>
+              <li>Lease-based mutation ordering</li>
+              <li>Heartbeats as the source of liveness truth</li>
+              <li>Relaxed consistency, strong enough for its workload</li>
+            </ul>
+            <div class="callout">Hercules isn't a port &mdash; it's a from-scratch Go reimplementation of the paper's
+              ideas, built to actually run.</div>
           </div>
-          <div class="callout">
-            Design rule: <em>separate control from data</em>. Clients talk to the master for
-            “where?”, then to chunkservers for “what?”.
-          </div>
+          <img class="borrow-shot" src="assets/hercules-photo-vault.png"
+            alt="Asset Chainsaw vault UI from the hercules-fnd README" />
         </div>
       </div>
     </section>
 
-    <!-- 3 -->
-    <section class="slide" data-title="Components">
-      <div class="eyebrow">Building blocks</div>
-      <h2>Six pieces that cooperate</h2>
+    <section class="slide" data-title="Reading the paper">
+      <div class="eyebrow">02 &middot; Method</div>
+      <h2>Breaking it down with Keshav's three-pass method</h2>
+      <p class="lede">Before writing a line of Go, I read GFS the way S. Keshav's <em>How to Read a Paper</em>
+        recommends &mdash; three passes, each going deeper than the last.</p>
+      <div class="grid-2">
+        <div>
+          <div class="pass">
+            <div class="pnum">1</div>
+            <div>
+              <h3>Get the gist (5&ndash;10 min)</h3>
+              <p class="muted">Title, abstract, section headings, conclusions. Enough to answer: what problem, what
+                approach, is this worth a second pass? For GFS: yes &mdash; a production filesystem design, published
+                with real operational numbers.</p>
+            </div>
+          </div>
+          <div class="pass">
+            <div class="pnum">2</div>
+            <div>
+              <h3>Grasp the content (~1 hour)</h3>
+              <p class="muted">Read in order, note figures and diagrams, skip proofs and low-level detail. This is where
+                the master/chunkserver split, the lease protocol, and the relaxed consistency model became clear.</p>
+            </div>
+          </div>
+          <div class="pass">
+            <div class="pnum">3</div>
+            <div>
+              <h3>Re-implement it</h3>
+              <p class="muted">The deepest pass: try to reconstruct the system yourself and see where your version
+                diverges from the paper's. Hercules <em>is</em> this pass &mdash; every gap between my first instinct
+                and the paper's actual design became a design decision I had to make consciously.</p>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Why this mattered here</h3>
+            <p class="muted">GFS is dense with implied detail &mdash; the paper describes <em>what</em> the system does
+              far more than <em>how</em> to make it correct under concurrency. Pass three is where those gaps surface:
+              version numbers, stale-replica handling, lease renewal races. None of that is optional once you're writing
+              Go instead of reading English.</p>
+          </div>
+          <div class="callout">Reference: S. Keshav, <em>How to Read a Paper</em>, ACM SIGCOMM CCR.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Why Go?">
+      <div class="eyebrow">03 &middot; Language choice</div>
+      <h2>Why Golang?</h2>
       <div class="grid-3">
-        <div class="card interactive" data-comp="master">
-          <h3>Master</h3>
-          <p class="muted">Metadata authority: namespace, chunk map, leases, re-replication.</p>
-        </div>
-        <div class="card interactive" data-comp="chunk">
-          <h3>Chunkserver</h3>
-          <p class="muted">Stores 64&nbsp;MB chunks as local files; serves reads and mutations.</p>
-        </div>
-        <div class="card interactive" data-comp="gateway">
-          <h3>Gateway</h3>
-          <p class="muted">HTTP façade that translates REST into HerculesClient RPC calls.</p>
-        </div>
-        <div class="card interactive" data-comp="detector">
-          <h3>Failure detector</h3>
-          <p class="muted">φ Accrual over Redis samples — soft suspicion of dead servers.</p>
-        </div>
-        <div class="card interactive" data-comp="namespace">
-          <h3>Namespace</h3>
-          <p class="muted">Directory tree, path resolution, soft-delete with GC later.</p>
-        </div>
-        <div class="card interactive" data-comp="buffer">
-          <h3>Download buffer</h3>
-          <p class="muted">Stages mutation data before commit; expires after 10&nbsp;s.</p>
-        </div>
-      </div>
-      <div class="detail-pane" id="compDetail" style="margin-top:1rem">
-        <h3>Select a card</h3>
-        <p class="muted">Each component has one clear job. Together they form a GFS-style DFS.</p>
-      </div>
-    </section>
-
-    <!-- 4 -->
-    <section class="slide" data-title="Process start">
-      <div class="eyebrow">Lifecycle · Step 1</div>
-      <h2>How a process begins</h2>
-      <p class="lede"><code>main.go</code> chooses a role from flags, then that role opens its listener.</p>
-      <div class="flow" id="bootFlow">
-        <div class="card"><div class="n">1</div><strong>Parse flags</strong><div class="muted">ServerType, addresses</div></div>
-        <div class="card"><div class="n">2</div><strong>Construct server</strong><div class="muted">Master / CS / Gateway</div></div>
-        <div class="card"><div class="n">3</div><strong>Register RPC</strong><div class="muted">rpc.Register(…)</div></div>
-        <div class="card"><div class="n">4</div><strong>Listen TCP</strong><div class="muted">net.Listen("tcp")</div></div>
-        <div class="card"><div class="n">5</div><strong>Accept loop</strong><div class="muted">ServeConn per socket</div></div>
-      </div>
-      <div class="controls-inline">
-        <button class="primary" id="bootPlay">Play startup</button>
-        <button id="bootReset">Reset</button>
-      </div>
-      <div class="kpi">
-        <div class="card"><strong>:9090</strong><span>Master RPC</span></div>
-        <div class="card"><strong>:8081–83</strong><span>Chunkservers</span></div>
-        <div class="card"><strong>:8089</strong><span>Gateway HTTP</span></div>
-        <div class="card"><strong>:6379</strong><span>Redis (φ)</span></div>
-      </div>
-    </section>
-
-    <!-- 5 -->
-    <section class="slide" data-title="TCP &amp; RPC">
-      <div class="eyebrow">Lifecycle · Step 2</div>
-      <h2>TCP connection &amp; RPC model</h2>
-      <div class="grid-2">
-        <div>
-          <div class="card">
-            <h3>Server side</h3>
-            <ul class="two-col-list" style="grid-template-columns:1fr">
-              <li>Long-lived TCP listener</li>
-              <li>One goroutine per accepted connection</li>
-              <li>Go <code>net/rpc</code> + <code>encoding/gob</code></li>
-              <li>Methods named <code>MasterServer.*</code> / <code>ChunkServer.*</code></li>
-            </ul>
-          </div>
-          <div class="card" style="margin-top:0.75rem">
-            <h3>Client side</h3>
-            <ul class="two-col-list" style="grid-template-columns:1fr">
-              <li><code>shared.UnicastToRPCServer</code> dials TCP per call</li>
-              <li>2&nbsp;s dial timeout · up to 3 retries</li>
-              <li>No connection pool — simplicity over reuse</li>
-              <li>Gateway is HTTP only; data plane stays RPC</li>
-            </ul>
-          </div>
-        </div>
-        <div class="seq" id="rpcSeq" aria-label="RPC call sequence">
-          <div class="line dim">// shared/rpc.go</div>
-          <div class="line">conn := DialContext(ctx, "tcp", addr)</div>
-          <div class="line">client := rpc.NewClient(conn)</div>
-          <div class="line">err := client.Call(method, args, reply)</div>
-          <div class="line">client.Close()</div>
-          <div class="line dim">// retry with exponential backoff if needed</div>
-        </div>
-      </div>
-      <div class="controls-inline">
-        <button class="primary" id="rpcPlay">Animate call</button>
-        <button id="rpcReset">Reset</button>
-      </div>
-      <p class="note">Key idea: every RPC is a fresh TCP socket. Servers keep listening; clients come and go.</p>
-    </section>
-
-    <!-- 6 -->
-    <section class="slide" data-title="Registration">
-      <div class="eyebrow">Lifecycle · Step 3</div>
-      <h2>Lazy chunkserver registration</h2>
-      <p class="lede">There is no static membership file. A chunkserver appears when it first heartbeats.</p>
-      <div class="grid-2">
-        <div class="steps" id="regSteps">
-          <div class="step"><div class="step-num">1</div><div><strong>Chunkserver starts</strong><div class="muted">Listens on its address; knows master address.</div></div></div>
-          <div class="step"><div class="step-num">2</div><div><strong>Immediate heartbeat</strong><div class="muted">Calls <code>MasterServer.RPCHeartBeatHandler</code>.</div></div></div>
-          <div class="step"><div class="step-num">3</div><div><strong>Master inserts entry</strong><div class="muted"><code>ChunkServerManager.HeartBeat</code> adds server map entry.</div></div></div>
-          <div class="step"><div class="step-num">4</div><div><strong>Later heartbeats sync inventory</strong><div class="muted">Master pulls chunk report via <code>CRPCSysReportHandler</code>.</div></div></div>
-          <div class="step"><div class="step-num">5</div><div><strong>Eligible for placement</strong><div class="muted">New chunks can be assigned to this server.</div></div></div>
-        </div>
-        <div>
-          <div class="card">
-            <h3>Stored per server</h3>
-            <ul class="two-col-list" style="grid-template-columns:1fr">
-              <li><code>lastHeartBeat</code> — liveness clock</li>
-              <li><code>chunks</code> — handles stored locally</li>
-              <li><code>serverInfo</code> — hostname & proximity RTT</li>
-              <li><code>garbages</code> — handles waiting to be deleted</li>
-            </ul>
-          </div>
-          <div class="controls-inline">
-            <button class="primary" id="regPlay">Step through</button>
-            <button id="regReset">Reset</button>
-          </div>
-          <div class="callout">First heartbeat only registers. Inventory reconciliation begins on the next ones.</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 7 -->
-    <section class="slide" data-title="Delegation">
-      <div class="eyebrow">Lifecycle · Step 4</div>
-      <h2>Master delegates work</h2>
-      <p class="lede">The master never ships file bytes. It answers “which servers?” and grants write authority.</p>
-      <div class="grid-2">
         <div class="card">
-          <h3>Read delegation</h3>
-          <ol class="steps" style="list-style:decimal; padding-left:1.1rem">
-            <li class="muted" style="opacity:1">Client → master: get replicas for chunk handle</li>
-            <li class="muted" style="opacity:1">Master returns locations</li>
-            <li class="muted" style="opacity:1">Client picks a replica (random)</li>
-            <li class="muted" style="opacity:1">Client → chunkserver: <code>CRPCReadChunkHandler</code></li>
-          </ol>
+          <h3>Simplicity</h3>
+          <p class="muted">A small language surface means the code reads like the paper's own pseudocode. No generics
+            gymnastics, no framework indirection standing between the design and the implementation.</p>
         </div>
         <div class="card">
-          <h3>Write delegation (leases)</h3>
-          <ol class="steps" style="list-style:decimal; padding-left:1.1rem">
-            <li class="muted" style="opacity:1">Client asks for primary + secondaries</li>
-            <li class="muted" style="opacity:1">Master grants / renews a <strong>120&nbsp;s lease</strong></li>
-            <li class="muted" style="opacity:1">Primary is notified via <code>CRPCGrantLeaseHandler</code></li>
-            <li class="muted" style="opacity:1">Client stages data, then commits on primary</li>
-          </ol>
-        </div>
-      </div>
-      <div class="callout">
-        Lease = temporary write monopoly for one chunk. Only the primary serializes mutations;
-        secondaries apply the same order.
-      </div>
-    </section>
-
-    <!-- 8 -->
-    <section class="slide" data-title="Mutation protocol">
-      <div class="eyebrow">Lifecycle · Step 5</div>
-      <h2>Write path: push then commit</h2>
-      <div class="grid-2">
-        <div class="steps" id="writeSteps">
-          <div class="step"><div class="step-num">1</div><div><strong>Obtain lease</strong><div class="muted">Master returns primary + secondaries.</div></div></div>
-          <div class="step"><div class="step-num">2</div><div><strong>Forward data</strong><div class="muted">Client pipelines bytes to all replicas (<code>CRPCForwardDataHandler</code>).</div></div></div>
-          <div class="step"><div class="step-num">3</div><div><strong>Buffer stage</strong><div class="muted">Each replica stores data in download buffer (10&nbsp;s TTL).</div></div></div>
-          <div class="step"><div class="step-num">4</div><div><strong>Commit on primary</strong><div class="muted">Primary assigns serial order and writes.</div></div></div>
-          <div class="step"><div class="step-num">5</div><div><strong>Apply on secondaries</strong><div class="muted"><code>CRPCApplyMutationHandler</code> in the same order.</div></div></div>
-          <div class="step"><div class="step-num">6</div><div><strong>Ack client</strong><div class="muted">Primary replies only after secondaries succeed.</div></div></div>
-        </div>
-        <div>
-          <div class="seq" id="writeSeq">
-            <div class="line dim">Client                Primary           Secondary</div>
-            <div class="line">|-- GetLease --------&gt; Master</div>
-            <div class="line">|-- ForwardData -----&gt; | --------------&gt; |</div>
-            <div class="line">|-- WriteChunk ------&gt; |</div>
-            <div class="line">                       |-- ApplyMut ---&gt; |</div>
-            <div class="line">                       |&lt;-- Ack -------- |</div>
-            <div class="line">|&lt;-- Success --------- |</div>
-          </div>
-          <div class="controls-inline">
-            <button class="primary" id="writePlay">Animate protocol</button>
-            <button id="writeReset">Reset</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 9 -->
-    <section class="slide" data-title="Heartbeats">
-      <div class="eyebrow">Lifecycle · Step 6</div>
-      <h2>Dual heartbeat model</h2>
-      <div class="grid-2">
-        <div class="card">
-          <h3>Chunkserver → Master</h3>
-          <p class="muted">Every <strong>5&nbsp;s</strong>. Carries machine info, optional lease extension request, network timing.</p>
-          <div class="callout">Refreshes <code>lastHeartBeat</code> and syncs chunk inventory.</div>
-        </div>
-        <div class="card">
-          <h3>Master → Chunkserver</h3>
-          <p class="muted">Every <strong>10&nbsp;s</strong> health loop. Probes live servers, runs φ tracking, triggers replication.</p>
-          <div class="callout">Also removes servers silent for ≥ <strong>60&nbsp;s</strong>.</div>
-        </div>
-      </div>
-      <div class="kpi" style="margin-top:1rem">
-        <div class="card"><strong>5 s</strong><span>CS heartbeat</span></div>
-        <div class="card"><strong>10 s</strong><span>Master health tick</span></div>
-        <div class="card"><strong>60 s</strong><span>Dead timeout</span></div>
-        <div class="card"><strong>3×</strong><span>Min replicas</span></div>
-      </div>
-    </section>
-
-    <!-- 10 -->
-    <section class="slide" data-title="Hard failure">
-      <div class="eyebrow">Fault tolerance · Hard path</div>
-      <h2>Timeout marks a server dead</h2>
-      <p class="lede">φ Accrual warns; the <em>hard</em> decision uses a simple wall-clock timeout.</p>
-      <div class="timeline">
-        <div class="t-item"><strong>T + 0 s</strong> — Chunkserver stops heartbeating.</div>
-        <div class="t-item"><strong>T + 5–55 s</strong> — <code>lastHeartBeat</code> ages; φ may rise (logged).</div>
-        <div class="t-item"><strong>T + 60 s</strong> — <code>detectDeadServer()</code> flags the address.</div>
-        <div class="t-item"><strong>Same tick</strong> — <code>removeServer</code> + <code>removeChunks</code>; under-replicated handles queued.</div>
-        <div class="t-item"><strong>Next health tick</strong> — <code>performReplication()</code> restores replica count.</div>
-      </div>
-      <div class="callout">
-        Dead if <code>time.Since(lastHeartBeat) ≥ 60s</code> (or heartbeat never arrived).
-        Typical detection window: about 60–70 seconds.
-      </div>
-    </section>
-
-    <!-- 11 -->
-    <section class="slide" data-title="φ Accrual">
-      <div class="eyebrow">Fault tolerance · Soft path</div>
-      <h2>φ Accrual failure detection</h2>
-      <p class="lede">Instead of a binary “alive/dead”, φ estimates how surprising a missed heartbeat is.</p>
-      <div class="phi-lab">
-        <div class="card">
-          <h3>Interactive intuition</h3>
-          <label class="muted" for="delaySlider">Time since last sample (ms relative to mean)</label>
-          <input id="delaySlider" type="range" min="0" max="4000" value="800" style="width:100%; margin:0.6rem 0" />
-          <div class="phi-value" id="phiValue">φ ≈ 0.5</div>
-          <div class="meter"><span id="phiBar"></span></div>
-          <div><span class="badge ok" id="phiBadge">Healthy</span></div>
-          <p class="muted" style="margin-top:0.75rem">
-            Formula: <code>φ = −log₁₀(1 − CDF((t−μ)/σ))</code>
+          <h3>Concurrency semantics</h3>
+          <p class="muted">GFS is fundamentally about concurrent actors &mdash; a master juggling heartbeats, leases and
+            replication, chunkservers serving reads while accepting writes. Goroutines + channels +
+            <code>sync.RWMutex</code> map directly onto that shape.
           </p>
         </div>
         <div class="card">
-          <h3>How Hercules uses it</h3>
-          <ul class="two-col-list" style="grid-template-columns:1fr">
-            <li>Heartbeats produce <code>NetworkData</code> RTT samples</li>
-            <li>Redis sampling window stores recent arrivals</li>
-            <li>Inter-arrival mean μ and σ are estimated</li>
-            <li><code>Predict()</code> returns φ + message</li>
-            <li>Today: advisory logging only — not the kill switch</li>
-          </ul>
-          <div class="callout">
-            Typical reading: φ &lt; 1 healthy · 1–8 warning · ≥ 8 high suspicion
-            (exact thresholds differ by process config).
-          </div>
+          <h3>Batteries included</h3>
+          <p class="muted"><code>net/rpc</code>, <code>encoding/gob</code>, <code>crypto/sha256</code>, and
+            <code>math</code> (for the &phi; Accrual CDF) come from the standard library alone &mdash; no framework
+            needed to get a working RPC system with wire encoding and checksums.
+          </p>
         </div>
       </div>
+      <div class="dep-row">
+        <span class="dep"><b>net/rpc</b> transport</span>
+        <span class="dep"><b>encoding/gob</b> wire format</span>
+        <span class="dep"><b>crypto/sha256</b> integrity</span>
+        <span class="dep"><b>math</b> &phi; Accrual CDF</span>
+        <span class="dep"><b>gin-gonic/gin</b> HTTP gateway</span>
+        <span class="dep"><b>redis/go-redis</b> &phi; sampling window</span>
+      </div>
+      <div class="callout">Only two direct third-party dependencies for the whole system: Gin for the HTTP gateway, and
+        a Redis client for the failure detector's sample window. Everything else &mdash; RPC, serialization, hashing,
+        concurrency &mdash; is stdlib.</div>
     </section>
 
-    <!-- 12 -->
-    <section class="slide" data-title="Re-replication">
-      <div class="eyebrow">Fault tolerance · Healing</div>
-      <h2>Re-replication restores durability</h2>
-      <div class="grid-2">
-        <div class="steps" id="repSteps">
-          <div class="step"><div class="step-num">1</div><div><strong>Queue migration</strong><div class="muted">Replica count &lt; 3 after failure or stale purge.</div></div></div>
-          <div class="step"><div class="step-num">2</div><div><strong>Choose source &amp; target</strong><div class="muted">Live holder → live non-holder.</div></div></div>
-          <div class="step"><div class="step-num">3</div><div><strong>Create empty chunk</strong><div class="muted">Target runs <code>CRPCCreateChunkHandler</code>.</div></div></div>
-          <div class="step"><div class="step-num">4</div><div><strong>Snapshot copy</strong><div class="muted">Source <code>GetSnapshot</code> → target <code>ApplyCopy</code>.</div></div></div>
-          <div class="step"><div class="step-num">5</div><div><strong>Verify</strong><div class="muted">Compare version, length, SHA-256 checksum.</div></div></div>
-          <div class="step"><div class="step-num">6</div><div><strong>Register replica</strong><div class="muted">Master updates locations; chunk is healthy again.</div></div></div>
+    <section class="slide" data-title="Master server">
+      <div class="eyebrow">04 &middot; Components &middot; Master server</div>
+      <h2>Master server: five jobs, one process</h2>
+      <p class="lede">Click a tab to see the real handler behind each responsibility.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs"><button type="button" class="code-tab active" data-target="m-oplog">Metadata
+              persistence<span class="src">master_server/master_server.go</span></button>
+            <button type="button" class="code-tab" data-target="m-gc">Garbage collection<span
+                class="src">master_server/cs_manager.go</span></button>
+            <button type="button" class="code-tab" data-target="m-ns">Namespace management<span
+                class="src">namespace_manager/nsmanager.go</span></button>
+            <button type="button" class="code-tab" data-target="m-cm">Chunk placement<span
+                class="src">master_server/cs_manager.go</span></button>
+            <button type="button" class="code-tab" data-target="m-hb">Heartbeat handling<span
+                class="src">master_server/master_server.go</span></button>
+          </div>
+          <div class="code-view">
+            <pre class="code-block active" id="m-oplog"><code>func (ma *MasterServer) loadMetadata() error {
+  file, err := ma.rootDir.GetFile(common.MasterMetaDataFileName, os.O_RDONLY, common.FileMode)
+  if err != nil {
+    var pathError *os.PathError
+    if errors.As(err, &amp;pathError) {
+      err = ma.rootDir.CreateFile(common.MasterMetaDataFileName)
+      if err != nil {
+        return err
+      }
+    }
+    file, err = ma.rootDir.GetFile(common.MasterMetaDataFileName, os.O_RDONLY, common.FileMode)
+    if err != nil {
+      return err
+    }
+  }
+
+  defer func(file *os.File) {
+    err := file.Close()
+    if err != nil {
+      log.Err(err).Stack().Send()
+    }
+  }(file)
+
+  var meta PesistentMeta
+  decoder := gob.NewDecoder(file)
+  err = decoder.Decode(&amp;meta)
+  if err != nil {
+    if !errors.Is(err, io.EOF) {
+      log.Printf(&quot;error occurred while loading metadata (%v); attempting recovery&quot;, err)
+      corruptName := fmt.Sprintf(&quot;%s.corrupt.%d&quot;, common.MasterMetaDataFileName, time.Now().Unix())
+      if renameErr := ma.rootDir.Rename(common.MasterMetaDataFileName, corruptName); renameErr != nil {
+        log.Err(renameErr).Stack().Msg(&quot;failed to rename corrupt master metadata&quot;)
+        return err
+      }
+      if createErr := ma.rootDir.CreateFile(common.MasterMetaDataFileName); createErr != nil {
+        return createErr
+      }
+      return nil
+    }
+  }
+
+  if len(meta.Namespace) != 0 {
+</code></pre>
+            <pre class="code-block" id="m-gc"><code>func (csm *ChunkServerManager) detectDeadServer() []common.ServerAddr {
+  csm.serverMutex.Lock()
+  defer csm.serverMutex.Unlock()
+
+  deadServers := make([]common.ServerAddr, 0, len(csm.servers))
+  for serverAddr, chk := range csm.servers {
+    if chk.lastHeartBeat.IsZero() || time.Since(chk.lastHeartBeat) &gt;= common.ServerHealthCheckTimeout {
+      deadServers = append(deadServers, serverAddr)
+    }
+  }
+  return deadServers
+
+
+func (csm *ChunkServerManager) addGarbage(addr common.ServerAddr, handle common.ChunkHandle) {
+  csm.serverMutex.Lock()
+  defer csm.serverMutex.Unlock()
+
+  sv, exists := csm.servers[addr]
+  if exists {
+    sv.Lock()
+    sv.garbages = append(sv.garbages, handle)
+    sv.Unlock()
+  }
+}
+
+// replicationMigration updates and returns the list of chunk handles requiring replica migration.
+// It checks the replica count for each chunk in the replicaMigration list and retains only those
+</code></pre>
+            <pre class="code-block" id="m-ns"><code>func (nm *NamespaceManager) Create(p common.Path) error {
+  nm.mu.Lock()
+  defer nm.mu.Unlock()
+
+  var (
+    filename string
+    dirpath  string
+  )
+  dirpath, filename = nm.RetrievePartitionFromPath(p)
+  err := common.ValidateFilename(filename, p)
+  if err != nil {
+    return err
+  }
+
+  parents, cwd, err := nm.lockParents(common.Path(dirpath), true)
+  defer nm.unlockParents(parents, true)
+  if err != nil {
+    return err
+  }
+
+  if _, ok := cwd.childrenNodes[filename]; ok {
+    return nil
+  }
+
+  cwd.childrenNodes[filename] = &amp;NsTree{Path: p, IsDir: false}
+  return nil
+}
+</code></pre>
+            <pre class="code-block" id="m-cm"><code>func (csm *ChunkServerManager) chooseServers(num int) ([]common.ServerAddr, error) {
+  type addrToRRTL struct {
+    addr common.ServerAddr
+    rrtl float64
+  }
+
+  csm.serverMutex.Lock()
+  defer csm.serverMutex.Unlock()
+
+  if num &gt; len(csm.servers) {
+    return nil, fmt.Errorf(&quot;no enough servers for %v replicas&quot;, num)
+  }
+
+  var (
+    intermediateArr []addrToRRTL
+    ret             []common.ServerAddr
+  )
+
+  for a, server := range csm.servers {
+    intermediateArr = append(intermediateArr, addrToRRTL{
+      addr: a,
+      rrtl: server.serverInfo.RoundTripProximityTime,
+    })
+  }
+
+  slices.SortFunc(intermediateArr, func(a, b addrToRRTL) int {
+    if a.rrtl &lt; b.rrtl {
+      return -1
+    } else if a.rrtl &gt; b.rrtl {
+      return 1
+    }
+    return 0
+  })
+
+  all := common.TransformSlice(intermediateArr, func(d addrToRRTL) common.ServerAddr { return d.addr })
+  choose, err := common.Sample(len(all), num)
+  if err != nil {
+    return nil, err
+  }
+  for _, v := range choose {
+    ret = append(ret, all[v])
+</code></pre>
+            <pre class="code-block" id="m-hb"><code>func (ma *MasterServer) serverHeartBeat() error {
+  deadServers := ma.chunkServerManager.detectDeadServer()
+  for _, addr := range deadServers {
+    log.Info().Msgf(&quot;&gt;&gt; Removing Server %v from Master&#x27;s servers list&quot;, addr)
+    handles, err1 := ma.chunkServerManager.removeServer(addr)
+    err2 := ma.chunkServerManager.removeChunks(handles, addr)
+    if err := errors.Join(err1, err2); err != nil {
+      return err
+    }
+  }
+
+  // perform a broadcast to all servers to get there health status for failure detection
+  allServers := common.TransformSlice(
+    ma.chunkServerManager.GetLiveServers(),
+    func(v common.ServerAddr) string { return string(v) },
+  )
+  if len(allServers) == 0 {
+    return nil
+  }
+
+  var errs []error
+  for _, addr := range allServers {
+    args := rpc_struct.ChunkServerHeartBeatArgs{}
+    args.NetworkData.ForwardTrip.SentAt = time.Now()
+
+    reply := &amp;rpc_struct.ChunkServerHeartBeatReply{}
+    err := shared.UnicastToRPCServer(
+      addr, rpc_struct.CRPCHeartBeatHandler, args,
+      reply, shared.DefaultRetryConfig,
+    )
+    if err != nil {
+      errs = append(errs, err)
+      continue
+    }
+</code></pre>
+          </div>
         </div>
         <div>
           <div class="card">
-            <h3>Integrity checks</h3>
-            <p class="muted">Checksums are whole-chunk SHA-256. Used for replication verification and metadata sync — not yet on every read.</p>
+            <h3>What the master owns</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li>The namespace tree &mdash; every path, file and directory</li>
+              <li>The chunk map &mdash; handle &rarr; replica locations</li>
+              <li>Leases &mdash; who is allowed to write, and until when</li>
+              <li>Liveness &mdash; who's still heartbeating</li>
+            </ul>
           </div>
-          <div class="card" style="margin-top:0.75rem">
-            <h3>Concurrency guard</h3>
-            <p class="muted"><code>replicationInProgress</code> prevents two copies of the same handle at once.</p>
+          <div class="callout">It never touches file bytes. Every card here is metadata work, not data work.</div>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="slide" data-title="Chunk server">
+      <div class="eyebrow">04 &middot; Components &middot; Chunk server</div>
+      <h2>Chunk server: dumb storage, done well</h2>
+      <p class="lede">Click a tab to see the real handler behind each responsibility.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs"><button type="button" class="code-tab active" data-target="c-comm">Communication to
+              master<span class="src">chunkserver/chunkserver.go</span></button>
+            <button type="button" class="code-tab" data-target="c-posix">POSIX-style file writes<span
+                class="src">chunkserver/chunkserver.go</span></button>
+            <button type="button" class="code-tab" data-target="c-append">Atomic record appends<span
+                class="src">chunkserver/chunkserver.go</span></button>
+            <button type="button" class="code-tab" data-target="c-snap">Snapshotting for replication<span
+                class="src">chunkserver/chunkserver.go</span></button>
           </div>
-          <div class="controls-inline">
-            <button class="primary" id="repPlay">Step recovery</button>
-            <button id="repReset">Reset</button>
+          <div class="code-view">
+            <pre class="code-block active" id="c-comm"><code>func (cs *ChunkServer) heartBeat() error {
+  arg := rpc_struct.HeartBeatArgs{
+    Address:     cs.ServerAddr,
+    MachineInfo: cs.MachineInfo,
+  }
+
+  if cs.leases.Length() != 0 {
+    arg.ExtendLease = true
+  }
+  arg.NetworkData.ForwardTrip.SentAt = time.Now()
+
+  var reply rpc_struct.HeartBeatReply
+  if err := shared.UnicastToRPCServer(string(cs.MasterAddr),
+    rpc_struct.MRPCHeartBeatHandler, arg, &amp;reply, shared.DefaultRetryConfig); err != nil {
+    return err
+  }
+
+  reply.NetworkData.BackwardTrip.ReceivedAt = time.Now()
+  if err := cs.failureDetector.Track(reply.NetworkData); err != nil {
+    log.Err(err).Stack().Msg(&quot;err storing network data for prediction&quot;)
+    return err
+  }
+
+  if reply.LeaseExtensions != nil {
+    common.ForEachInSlice(reply.LeaseExtensions, func(lease *common.Lease) {
+      cs.leases.PushBack(lease)
+    })
+  }
+
+  if reply.Garbage != nil {
+    cs.garbageMu.Lock()
+    common.ForEachInSlice(reply.Garbage, func(handle common.ChunkHandle) {
+      cs.garbage.PushBack(handle)
+    })
+    cs.garbageMu.Unlock()
+  }
+  prediction, err := cs.failureDetector.Predict()
+  if err != nil {
+    if !errors.Is(err, detector.ErrNotEnoughHistoricalSamples) {
+      log.Err(err).Stack().Send()
+    }
+</code></pre>
+            <pre class="code-block" id="c-posix"><code>func (cs *ChunkServer) writeChunk(handle common.ChunkHandle, data []byte, mutationType common.MutationType, offset common.Offset, lock bool) (int, error) {
+  cs.mu.RLock()
+  chInfo, ok := cs.chunks[handle]
+  cs.mu.RUnlock()
+  if !ok {
+    return 0, fmt.Errorf(&quot;chunk %v on server %v does not exist&quot;, handle, cs.ServerAddr)
+  }
+
+  if mutationType != common.MutationWrite &amp;&amp; mutationType != common.MutationAppend &amp;&amp; mutationType != common.MutationPad {
+    return 0, fmt.Errorf(&quot;invalid mutation type for chunk %v: %v&quot;, handle, mutationType)
+  }
+
+  if lock {
+    cs.mu.Lock()
+    defer cs.mu.Unlock()
+  }
+
+  newLen := offset + common.Offset(len(data))
+  if newLen &gt; common.ChunkMaxSizeInByte {
+    return 0, fmt.Errorf(&quot;data size for chunk %v on server %v exceeds max size %v bytes&quot;, handle, cs.ServerAddr, common.ChunkMaxSizeInByte)
+  }
+
+  chInfo.Lock()
+  defer chInfo.Unlock()
+  if newLen &gt; chInfo.length {
+    chInfo.length = newLen
+  }
+
+  fs, err := cs.rootDir.GetFile(fmt.Sprintf(common.ChunkFileNameFormat, handle), os.O_CREATE|os.O_RDWR, 0644)
+  if err != nil {
+    return 0, err
+  }
+  defer func(fs *os.File) {
+    if err := fs.Close(); err != nil {
+      log.Err(err).Msgf(&quot;failed to close file for chunk %v&quot;, handle)
+    }
+  }(fs)
+
+  log.Info().Msgf(&quot;Server %v writing data to chunk %v at offset %v&quot;, cs.ServerAddr, handle, offset)
+  var n int
+  for {
+    if mutationType == common.MutationAppend {
+      _, err := fs.Seek(0, io.SeekEnd)
+      if err != nil {
+        return 0, err
+      }
+      n, err = fs.Write(data)
+      if err != nil {
+        log.Err(err).Msgf(&quot;failed to append to chunk %v at offset %v&quot;, handle, offset)
+        return 0, err
+      }
+    } else {
+      n, err = fs.WriteAt(data, int64(offset))
+      if err != nil {
+        log.Err(err).Msgf(&quot;failed to write to chunk %v at offset %v&quot;, handle, offset)
+        return 0, err
+      }
+    }
+    log.Debug().Msgf(&quot;[%s] Wrote %d bytes to chunk %v at offset %v&quot;, cs.ServerAddr, n, handle, offset)
+    if n &lt; len(data) {
+      data = data[n:]
+      offset += common.Offset(n)
+      continue
+    }
+    break
+  }
+  chInfo.lastModified = time.Now()
+  if newLen &gt;= common.ChunkMaxSizeInByte {
+    chInfo.completed = true
+  }
+  chInfo.checksumDirty = true
+
+  if err := fs.Sync(); err != nil {
+    log.Err(err).Msgf(&quot;failed to sync chunk %v to disk&quot;, handle)
+  }
+  return int(newLen), nil
+</code></pre>
+            <pre class="code-block" id="c-append"><code>func (cs *ChunkServer) RPCAppendChunkHandler(args rpc_struct.AppendChunkArgs, reply *rpc_struct.AppendChunkReply) error {
+  data, ok := cs.downloadBuffer.Get(args.DownloadBufferId)
+  if !ok {
+    reply.ErrorCode = common.DownloadBufferMiss
+    return fmt.Errorf(
+      &quot;could not locate %v in buffer (might have expired ...)&quot;,
+      args.DownloadBufferId)
+  }
+
+  handle := args.DownloadBufferId.Handle
+  cs.mu.RLock()
+  chInfo, ok := cs.chunks[handle]
+  cs.mu.RUnlock()
+
+  if !ok || chInfo.abandoned {
+    return fmt.Errorf(&quot;%v is either abandoned or lives in another dimension&quot;, handle)
+  }
+
+  if chInfo.isCompressed {
+    if err := cs.unarchiveChunks(handle); err != nil {
+      return err
+    }
+  }
+  var mutationType common.MutationType
+  offset := chInfo.length
+  newLength := chInfo.length + common.Offset(len(data))
+  dataSize := common.BToMb(uint64(newLength))
+
+  if dataSize &gt; common.ChunkMaxSizeInMb {
+    mutationType = common.MutationPad
+    chInfo.length = common.ChunkMaxSizeInByte
+    reply.ErrorCode = common.AppendExceedChunkSize
+  } else {
+    mutationType = common.MutationAppend
+  }
+
+  reply.Offset = offset
+  mutation := &amp;common.Mutation{
+    MutationType: mutationType,
+    Data:         data,
+    Offset:       offset,
+  }
+
+  n, err := cs.doMutate(handle, mutation)
+  if err != nil {
+</code></pre>
+            <pre class="code-block" id="c-snap"><code>func (cs *ChunkServer) RPCGetSnapshotHandler(args rpc_struct.GetSnapshotArgs, reply *rpc_struct.GetSnapshotReply) error {
+  handle := args.Handle
+  cs.mu.RLock()
+  chInfo, ok := cs.chunks[handle]
+  if !ok || chInfo.abandoned {
+    cs.mu.RUnlock()
+    return fmt.Errorf(&quot;chunk %v does not exist or is abandoned&quot;, handle)
+  }
+  cs.mu.RUnlock()
+  if chInfo.isCompressed {
+    if err := cs.unarchiveChunks(handle); err != nil {
+      return err
+    }
+  }
+
+  data := make([]byte, chInfo.length)
+  if _, err := cs.readChunk(handle, 0, data); err != nil {
+    return err
+  }
+  // Snapshot reads the whole chunk; refresh checksum from the snapshot bytes.
+  sum := sha256.Sum256(data)
+  cs.mu.Lock()
+  chInfo.checksum = common.Checksum(sum[:])
+  chInfo.checksumDirty = false
+  cs.mu.Unlock()
+
+  var r rpc_struct.ApplyCopyReply
+  applyCopyArgs := rpc_struct.ApplyCopyArgs{
+    Handle:  handle,
+    Data:    data,
+    Version: chInfo.version,
+
+
+func (cs *ChunkServer) RPCApplyCopyHandler(args rpc_struct.ApplyCopyArgs, reply *rpc_struct.ApplyCopyReply) error {
+  handle := args.Handle
+  cs.mu.RLock()
+  chInfo, ok := cs.chunks[handle]
+  cs.mu.RUnlock()
+  if !ok || chInfo.abandoned {
+    return fmt.Errorf(&quot;chunk %v does not exist or is abandoned&quot;, handle)
+  }
+
+  if chInfo.isCompressed {
+    err := cs.unarchiveChunks(handle)
+    if err != nil {
+      return err
+    }
+  }
+
+  _, err := cs.writeChunk(handle, args.Data, common.MutationWrite, 0, true)
+  if err != nil {
+    return err
+  }
+  cs.mu.Lock()
+  chInfo.version = args.Version
+  cs.mu.Unlock()
+  log.Info().Msgf(&quot;Server %v : Copy handler done&quot;, cs.ServerAddr)
+
+  reply.ErrorCode = common.Success
+</code></pre>
           </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>What a chunkserver owns</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li>The actual bytes, as local <code>chunk-{handle}.chk</code> files</li>
+              <li>Its own liveness reporting to the master</li>
+              <li>Applying mutations in the order the primary assigns</li>
+              <li>Serving reads directly &mdash; the master is never in this path</li>
+            </ul>
+          </div>
+          <div class="callout">Chunkservers are intentionally simple: talk to the master, talk to the local filesystem,
+            apply what you're told.</div>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="slide" data-title="Locking &amp; Leasing">
+      <div class="eyebrow">05 &middot; Locking &amp; Leasing</div>
+      <h2>Two kinds of locking, one correctness story</h2>
+      <p class="lede">Namespace locking keeps directory operations safe; leases keep chunk writes ordered without a
+        distributed lock.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs"><button type="button" class="code-tab active" data-target="l-ns">Namespace path
+              locking<span class="src">namespace_manager/nsmanager.go</span></button>
+            <button type="button" class="code-tab" data-target="l-lease">Chunk lease grant<span
+                class="src">master_server/cs_manager.go</span></button>
+          </div>
+          <div class="code-view">
+            <pre class="code-block active" id="l-ns"><code>func (nm *NamespaceManager) lockParents(p common.Path, lock bool) ([]*NsTree, *NsTree, error) {
+  locked := []*NsTree{}
+  current := nm.root
+  nm.root.RLock()
+  locked = append(locked, nm.root)
+
+  if string(p) == &quot;&quot; || string(p) == &quot;/&quot; {
+    if lock {
+      nm.root.RUnlock()
+      nm.root.Lock()
+    }
+    return locked, nm.root, nil
+  }
+
+  pf := strings.Split(string(p), &quot;/&quot;)
+  parts := []string{}
+  for _, part := range pf {
+    if part != &quot;&quot; {
+      parts = append(parts, part)
+    }
+  }
+
+  for i, name := range parts {
+    child, ok := current.childrenNodes[name]
+    if !ok {
+      for j := len(locked) - 1; j &gt;= 0; j-- {
+        locked[j].RUnlock()
+      }
+      return nil, nil, fmt.Errorf(&quot;path %s is not found&quot;, p)
+    }
+
+    current.RUnlock()
+    locked = locked[:len(locked)-1]
+
+    isLast := (i == len(parts)-1)
+    if isLast &amp;&amp; lock {
+      child.Lock()
+    } else {
+      child.RLock()
+    }
+    locked = append(locked, child)
+    current = child
+  }
+  return locked, current, nil
+}
+
+// unlockParents releases the locks on the provided list of locked nodes in reverse order.
+func (nm *NamespaceManager) unlockParents(locked []*NsTree, lock bool) {
+  if len(locked) == 0 {
+    return
+  }
+  lastIndex := len(locked) - 1
+  for i := lastIndex; i &gt;= 0; i-- {
+    if i == lastIndex &amp;&amp; lock {
+      locked[i].Unlock()
+    } else {
+      locked[i].RUnlock()
+    }
+  }
+}
+</code></pre>
+            <pre class="code-block" id="l-lease"><code>func (csm *ChunkServerManager) extendLease(handle common.ChunkHandle, primary common.ServerAddr) (*chunkInfo, error) {
+  csm.chunkMutex.RLock()
+  chk, ok := csm.chunks[handle]
+  csm.chunkMutex.RUnlock()
+
+  if !ok {
+    return nil, fmt.Errorf(&quot;cannot extend lease for %v&quot;, primary)
+  }
+
+  if chk.primary != primary &amp;&amp; chk.expire.After(time.Now()) {
+    return nil, fmt.Errorf(&quot;%v does not hold lease for %v &quot;, primary, handle)
+  }
+
+  chk.expire = chk.expire.Add(common.LeaseTimeout)
+  return chk, nil
+
+
+func (csm *ChunkServerManager) getLeaseHolder(handle common.ChunkHandle) (*common.Lease, []common.ServerAddr, error) {
+  csm.chunkMutex.RLock()
+  chk, ok := csm.chunks[handle]
+  csm.chunkMutex.RUnlock()
+
+  if !ok {
+    return nil, nil, fmt.Errorf(&quot;cannot find chunk handle %v - Invalid most likely&quot;, handle)
+  }
+
+  chk.Lock()
+  defer chk.Unlock()
+
+  var staleServers []common.ServerAddr
+  lease := &amp;common.Lease{}
+</code></pre>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Two different locks</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li><strong>Namespace locks</strong> &mdash; per-directory RW locks, acquired root-to-leaf, so two clients
+                can create files in different directories without blocking each other.</li>
+              <li><strong>Chunk leases</strong> &mdash; a 120&nbsp;s write monopoly granted to one chunkserver per
+                chunk. Not a mutex; a time-bounded authority the master hands out.</li>
+            </ul>
+          </div>
+          <div class="callout warm">The lease is what makes GFS's relaxed consistency model safe: as long as only the
+            lease holder serializes writes, replicas can apply mutations in the same order without a distributed lock.
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="slide" data-title="Failure detection">
+      <div class="eyebrow">06 &middot; Fault tolerance</div>
+      <h2>Failure detection: soft suspicion, hard decisions</h2>
+      <p class="lede">&Phi; Accrual turns "missed heartbeat" into a continuous suspicion score instead of a binary flag;
+        a plain 60&nbsp;s timeout still makes the actual removal decision.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs">
+            <button type="button" class="code-tab active" data-target="f-phi">&phi; formula<span
+                class="src">detector/failure_detector.go</span></button>
+            <button type="button" class="code-tab" data-target="f-predict">Predict()<span
+                class="src">detector/failure_detector.go</span></button>
+          </div>
+          <div class="code-view">
+            <pre class="code-block active" id="f-phi"><code>func phi(timeDiff, mean, stdDeviation float64) float64 {
+  if stdDeviation == 0 {
+    return math.Inf(1) // Cannot compute φ with zero variance
+  }
+
+  // Standardize the time difference: z = (t - μ) / σ
+  z := (timeDiff - mean) / stdDeviation
+
+  // Compute the CDF of the standard normal distribution: F(z) = (1 + erf(z/√2))/2
+  // erf is the error function, available in math package
+  cdf := 0.5 * (1 + math.Erf(z/math.Sqrt2))
+
+  // Compute φ = -log10(1 - F(z))
+  // If cdf ≈ 1, 1-cdf is very small, so handle edge case to avoid log(0)
+  if cdf &gt;= 1.0 {
+    return math.Inf(1) // Extremely high suspicion (failure almost certain)
+  }
+  phiValue := -math.Log10(1.0 - cdf)
+
+  if math.IsNaN(phiValue) || math.IsInf(phiValue, -1) {
+</code></pre>
+            <pre class="code-block" id="f-predict"><code>func (fd *FailureDetector) Predict() (Prediction, error) {
+  fd.mu.RLock()
+  if fd.isShutdown {
+    fd.mu.RUnlock()
+    return Prediction{}, ErrAlreadyShutdown
+  }
+  fd.mu.RUnlock()
+
+  ctx, cancel := context.WithTimeout(context.Background(), fd.ContextTimeout)
+  defer cancel()
+  entries, err := fd.Window.Get(ctx)
+  if err != nil {
+    return Prediction{}, ErrHistoricalSampling
+  }
+
+  minRequiredSamples := int(float64(fd.Window.size) * MinSamplesRatio)
+  if len(entries) &lt; minRequiredSamples {
+    return Prediction{}, ErrNotEnoughHistoricalSamples
+  }
+
+  sort.Slice(entries, func(i, j int) bool {
+    return entries[i].Eta.Before(entries[j].Eta)
+  })
+
+  arrivalTimes := common.TransformSlice(entries, func(entry Entry) float64 {
+    return float64(entry.Eta.UnixMilli())
+  })
+
+  intervals := make([]float64, len(arrivalTimes)-1)
+  for i := 1; i &lt; len(arrivalTimes); i++ {
+    intervals[i-1] = arrivalTimes[i] - arrivalTimes[i-1]
+  }
+
+  if len(intervals) == 0 {
+    return Prediction{}, ErrInsufficientIntervalData
+  }
+
+  mean := common.Sum(intervals) / float64(len(intervals))
+  variance := 0.0
+  common.ForEachInSlice(intervals, func(v float64) {
+    variance += math.Pow(v-mean, 2)
+  })
+  variance /= float64(len(intervals))
+
+  if variance == 0 {
+    return Prediction{}, ErrZeroVariance
+</code></pre>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Try it</h3>
+            <label class="muted" for="delaySlider">Time since last heartbeat (ms relative to mean)</label>
+            <input id="delaySlider" type="range" min="0" max="4000" value="800" style="width:100%; margin:.55rem 0" />
+            <div style="font-family:'Bricolage Grotesque',serif;font-size:2rem;" id="phiValue">&phi; &asymp; 0.5</div>
+            <div
+              style="height:.65rem;background:var(--progress-track);border-radius:999px;overflow:hidden;margin:.6rem 0 .35rem;">
+              <span id="phiBar"
+                style="display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--warn),var(--alert));transition:width .35s ease;"></span>
+            </div>
+            <span id="phiBadge"
+              style="display:inline-block;border-radius:999px;padding:.22rem .6rem;font-size:.78rem;font-weight:700;background:var(--accent-soft);color:var(--accent);">Healthy</span>
+          </div>
+          <div class="callout">&phi; is advisory &mdash; it's logged, not acted on directly. The hard timeout (60&nbsp;s
+            of silence) is what actually removes a server and triggers re-replication.</div>
+          <div class="callout">Reference: Arpit Bhayani, <a
+              href="https://medium.com/@arpitbhayani/phi-%CF%86-accrual-failure-detection-79c21ce53a7a" target="_blank"
+              rel="noopener noreferrer"><em>&Phi; Accrual Failure Detection</em></a>.</div>
         </div>
       </div>
     </section>
 
-    <!-- 13 -->
-    <section class="slide" data-title="Parameters">
-      <div class="eyebrow">Reference</div>
-      <h2>Key constants to remember</h2>
-      <table class="params">
-        <thead>
-          <tr><th>Parameter</th><th>Value</th><th>Effect</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Chunk size</td><td>64 MB</td><td>Unit of storage &amp; replication</td></tr>
-          <tr><td>Min replicas</td><td>3</td><td>Triggers re-replication when lower</td></tr>
-          <tr><td>CS heartbeat</td><td>5 s</td><td>Liveness + inventory sync</td></tr>
-          <tr><td>Master health check</td><td>10 s</td><td>Dead scan + φ + replication</td></tr>
-          <tr><td>Dead timeout</td><td>60 s</td><td>Hard failure decision</td></tr>
-          <tr><td>Lease timeout</td><td>120 s</td><td>Primary write authority window</td></tr>
-          <tr><td>Download buffer TTL</td><td>10 s</td><td>Staged mutation data expiry</td></tr>
-        </tbody>
-      </table>
-      <p class="note">Source of truth: <code>common/constants.go</code>.</p>
+    <section class="slide" data-title="Data integrity">
+      <div class="eyebrow">07 &middot; Data integrity</div>
+      <h2>Checksums and versioning: two different failure modes</h2>
+      <p class="lede">One catches corruption at rest; the other catches replicas that quietly fell behind.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs"><button type="button" class="code-tab active" data-target="d-checksum">Lazy SHA-256
+              checksum<span class="src">chunkserver/chunkserver.go</span></button>
+            <button type="button" class="code-tab" data-target="d-version">Version reconciliation<span
+                class="src">chunkserver/chunkserver.go</span></button>
+          </div>
+          <div class="code-view">
+            <pre class="code-block active" id="d-checksum"><code>  var metadatas []PersistedMetaData
+
+  for handle, ch := range cs.chunks {
+    // Recompute checksum lazily (avoid hashing the full chunk on every write).
+    if ch.checksumDirty &amp;&amp; !ch.isCompressed {
+      filename := fmt.Sprintf(common.ChunkFileNameFormat, handle)
+      f, ferr := cs.rootDir.GetFile(filename, os.O_RDONLY, common.FileMode)
+      if ferr == nil {
+        if _, serr := f.Seek(0, io.SeekStart); serr == nil {
+          hasher := sha256.New()
+          if _, cerr := io.Copy(hasher, f); cerr == nil {
+            ch.checksum = common.Checksum(hasher.Sum(nil))
+            ch.checksumDirty = false
+          }
+        }
+</code></pre>
+            <pre class="code-block" id="d-version"><code>func (cs *ChunkServer) RPCCheckChunkVersionHandler(
+  args rpc_struct.CheckChunkVersionArgs, reply *rpc_struct.CheckChunkVersionReply) error {
+  cs.mu.Lock()
+  defer cs.mu.Unlock()
+
+  chinfo, ok := cs.chunks[args.Handle]
+  if !ok {
+    log.Info().Msgf(
+      &quot;Server %s: chunk %v not found, marking as stale&quot;,
+      cs.ServerAddr, args.Handle)
+    reply.Stale = true
+    return nil
+  }
+
+  if chinfo.version == args.Version {
+    chinfo.lastModified = time.Now()
+    reply.Stale = false
+    return nil
+  }
+
+  if chinfo.version+common.ChunkVersion(1) == args.Version {
+    log.Info().Msgf(
+      &quot;Server %s: chunk %v is one version behind, updating version&quot;,
+      cs.ServerAddr, args.Handle)
+    reply.Stale = false
+    chinfo.lastModified = time.Now()
+    chinfo.version++
+    return nil
+  }
+
+  reply.Stale = true
+  chinfo.lastModified = time.Now()
+  if chinfo.version &gt; args.Version {
+    log.Warn().Msgf(
+      &quot;Server %s: chunk %v local version %v ahead of authoritative %v (stale for quorum; not abandoning)&quot;,
+      cs.ServerAddr, args.Handle, chinfo.version, args.Version)
+    return nil
+  }
+</code></pre>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>Two separate guarantees</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li><strong>Checksums</strong> catch silent corruption &mdash; whole-chunk SHA-256, recomputed lazily so a
+                busy chunk isn't rehashed on every write.</li>
+              <li><strong>Versioning</strong> catches staleness &mdash; a replica that missed a mutation reports a lower
+                version and gets flagged before it's trusted again.</li>
+            </ul>
+          </div>
+          <div class="callout warm">Neither one fixes the other's problem. A checksum can't tell you a replica is merely
+            <em>behind</em>; a version number can't tell you a byte flipped on disk.
+          </div>
+        </div>
+      </div>
+
     </section>
 
-    <!-- 14 -->
-    <section class="slide" data-title="End-to-end">
-      <div class="eyebrow">Synthesis</div>
-      <h2>The full story in one breath</h2>
+    <section class="slide" data-title="Client SDK">
+      <div class="eyebrow">08 &middot; Client SDK</div>
+      <h2>Building an SDK wrapper worth using</h2>
+      <p class="lede">A native Go client that turns paths and byte offsets into chunk handles, leases and RPC calls
+        &mdash; so callers never see the plumbing.</p>
+      <div class="grid-2" style="margin-top:.6rem;">
+        <div class="code-wrap">
+          <div class="code-tabs"><button type="button" class="code-tab active" data-target="s-lease-get">Cached lease
+              lookup<span class="src">hercules/hercules.go</span></button>
+            <button type="button" class="code-tab" data-target="s-posix">POSIX-shaped calls<span
+                class="src">hercules/hercules.go</span></button>
+          </div>
+          <div class="code-view">
+            <pre class="code-block active" id="s-lease-get"><code>func (hercules *HerculesClient) GetChunkServers(handle common.ChunkHandle) (*common.Lease, error) {
+  hercules.cacheMux.RLock()
+  lease, exists := hercules.cache[handle]
+  stale := exists &amp;&amp; lease.IsExpired(time.Now())
+  hercules.cacheMux.RUnlock()
+  if exists &amp;&amp; !stale {
+    return lease, nil
+  }
+  if stale {
+    hercules.cacheMux.Lock()
+    delete(hercules.cache, handle)
+    hercules.cacheMux.Unlock()
+  }
+
+  var primaryAndSecondaryServersReply rpc_struct.PrimaryAndSecondaryServersInfoReply
+
+  err := shared.UnicastToRPCServer(
+    string(hercules.master), rpc_struct.MRPCGetPrimaryAndSecondaryServersInfoHandler,
+    rpc_struct.PrimaryAndSecondaryServersInfoArg{Handle: handle},
+    &amp;primaryAndSecondaryServersReply,
+    shared.DefaultRetryConfig,
+  )
+  if err != nil {
+    return nil, err
+  }
+
+  newLease := &amp;common.Lease{
+    Handle:      handle,
+    Expire:      primaryAndSecondaryServersReply.Expire,
+    Primary:     primaryAndSecondaryServersReply.Primary,
+    Secondaries: primaryAndSecondaryServersReply.SecondaryServers,
+  }
+
+  if newLease.IsExpired(time.Now()) {
+    return nil, fmt.Errorf(&quot;GetChunkServers = %v has expired before use&quot;, newLease)
+  }
+
+  hercules.cacheMux.Lock()
+</code></pre>
+            <pre class="code-block" id="s-posix"><code>func (hercules *HerculesClient) MkDir(path common.Path) error {
+  reply := &amp;rpc_struct.MakeDirectoryReply{}
+  return shared.UnicastToRPCServer(
+    string(hercules.master),
+    rpc_struct.MRPCMkdirHandler,
+    rpc_struct.MakeDirectoryArgs{Path: path}, reply, shared.DefaultRetryConfig)
+}
+
+// CreateFile creates a file at the specified path.
+// It sends an RPC request to the master server to create the file.
+//
+// Parameters:
+//   - path: The path of the file to create.
+//
+// Returns:
+//   - An error if the RPC call fails.
+func (hercules *HerculesClient) CreateFile(path common.Path) error {
+  reply := &amp;rpc_struct.CreateFileReply{}
+  return shared.UnicastToRPCServer(
+    string(hercules.master),
+    rpc_struct.MRPCCreateFileHandler,
+    rpc_struct.CreateFileArgs{Path: path}, reply, shared.DefaultRetryConfig)
+</code></pre>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <h3>The surface the client exposes</h3>
+            <ul class="two-col-list" style="grid-template-columns:1fr">
+              <li><code>MkDir</code> &middot; <code>CreateFile</code> &middot; <code>List</code></li>
+              <li><code>Read</code> &middot; <code>Write</code> &middot; <code>Append</code></li>
+              <li><code>RenameFile</code> &middot; <code>DeleteFile</code> &middot; <code>GetFile</code></li>
+            </ul>
+          </div>
+          <div class="callout">The public API reads like a POSIX-ish filesystem client. Underneath, every call is chunk
+            math, lease negotiation, and RPC retries &mdash; the SDK's job is to hide all of that.</div>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="slide" data-title="Field notes">
+      <div class="eyebrow">The honest part</div>
+      <h2>Bugs, reversals, and "why did I think that would work"</h2>
+      <p class="lede">The paper describes the shape of the system. Git history is where the real questions showed up
+        &mdash; and where the fix was never quite the last word.</p>
+      <div class="fn-grid">
+        <div class="card">
+          <span class="fn-tag bug">Bug</span>
+          <h3>The dedup race outside any session</h3>
+          <p class="muted">A deposit-path check ran outside the primary's lock, so two near-simultaneous mutations both
+            read "not yet applied" and both proceeded.</p>
+          <div class="fn-fix"><strong>Fix.</strong> Serialize on the lease holder: heartbeat/lease list got its own
+            mutex, HeartBeat took a write lock, <code>Done()</code> on the download buffer fires once, and
+            <code>writeChunk</code> mutates under <code>chInfo.Lock()</code>.
+          </div>
+          <div class="fn-next"><strong>Still open.</strong> GFS serial numbers never landed. Writes still
+            <code>PopAllReverse</code> the lease deque to find a holder &mdash; lookup that can race the next writer.
+          </div>
+          <p class="fn-q">If two clients retry the same append, what should make the second one a no-op?</p>
+        </div>
+        <div class="card">
+          <span class="fn-tag reversal">Design reversal</span>
+          <h3>Leases looked optional, then didn't</h3>
+          <p class="muted">Early versions let any replica accept a write and gossip it around. It "worked" on one node
+            and collapsed the moment two clients raced the same chunk.</p>
+          <div class="fn-fix"><strong>Fix.</strong> A 120&nbsp;s lease, one primary, expired writes rejected. Expiry
+            probes replicas with <code>CheckChunkVersion</code> &mdash; it no longer bumps the version on timeout
+            alone.</div>
+          <div class="fn-next"><strong>Still open.</strong> Docs still say 60&nbsp;s. There is no explicit revoke, only
+            "is it expired yet?" The client cache can serve a lease that the master has already moved on from.</div>
+          <p class="fn-q">If leases are "just a timeout," why can't a secondary start writing the moment the clock runs
+            out?</p>
+        </div>
+        <div class="card">
+          <span class="fn-tag bug">Bug</span>
+          <h3>Checksums that verified nothing</h3>
+          <p class="muted">Re-replication compared checksums after the copy was already accepted as done, so a truncated
+            snapshot could still join the replica set.</p>
+          <div class="fn-fix"><strong>Fix.</strong> <code>performReplication</code> now checks version, length and
+            checksum <em>before</em> <code>registerReplicas</code>. Mismatch garbage-collects the target. Snapshot reads
+            rehash from the bytes they just copied.</div>
+          <div class="fn-next"><strong>Still open.</strong> Verification is skipped when SysReport is missing. Checksums
+            are still whole-chunk SHA-256, not GFS's 64&nbsp;KB blocks, and there is no idle scrubber.</div>
+          <p class="fn-q">If you verify after you already trust the replica, what did you actually verify?</p>
+        </div>
+        <div class="card">
+          <span class="fn-tag lesson">Lesson</span>
+          <h3>&Phi; is advisory, and that's the point</h3>
+          <p class="muted">I wanted &phi; Accrual to evict nodes directly. The detector's own notes already split the
+            job: monitor, interpret, then let the application act.</p>
+          <div class="fn-fix"><strong>Fix.</strong> Suspicion stays a log line. The 60&nbsp;s heartbeat timeout is what
+            removes a server and kicks re-replication. Noisy scores no longer move replica membership.</div>
+          <div class="fn-next"><strong>Still open.</strong> &phi; is still unwired from the control plane. The Redis
+            window assumes clocks that don't lie &mdash; the source even asks for NTP or logical clocks.</div>
+          <p class="fn-q">Should a noisy suspicion score ever be allowed to evict a replica by itself?</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="Summary">
+      <div class="eyebrow">09 &middot; Summary</div>
+      <h2>What building Hercules actually taught me</h2>
       <div class="card">
-        <ol class="two-col-list" style="grid-template-columns:1fr; gap:0.65rem">
-          <li><strong>Boot</strong> — process registers RPC handlers and listens on TCP.</li>
-          <li><strong>Join</strong> — chunkservers announce themselves with heartbeats.</li>
-          <li><strong>Ask</strong> — clients (via gateway/SDK) query the master for metadata.</li>
-          <li><strong>Delegate</strong> — master returns locations and grants leases.</li>
-          <li><strong>Transfer</strong> — clients move bytes directly with chunkservers.</li>
-          <li><strong>Watch</strong> — dual heartbeats refresh liveness; φ estimates suspicion.</li>
-          <li><strong>Heal</strong> — after 60&nbsp;s silence, master removes the server and re-replicates.</li>
+        <ol class="two-col-list" style="grid-template-columns:1fr; gap:.6rem">
+          <li><strong>Read in three passes.</strong> The third pass &mdash; re-implementing &mdash; is where a paper's
+            real assumptions surface.</li>
+          <li><strong>Go's simplicity is a feature for systems code.</strong> Fewer abstractions between the design and
+            the implementation means fewer places for the design to get lost in translation.</li>
+          <li><strong>Separate control from data, always.</strong> The master answers "where," chunkservers answer
+            "what." Nearly every clean boundary in this system follows that split.</li>
+          <li><strong>Leases aren't locks &mdash; they're time-bounded authority.</strong> That distinction is what
+            makes relaxed consistency safe instead of just risky.</li>
+          <li><strong>Suspicion and decision are different jobs.</strong> &phi; Accrual estimates; a timeout decides.
+            Conflating them makes both harder to trust.</li>
+          <li><strong>Integrity needs two checks, not one.</strong> Checksums catch corruption; versions catch
+            staleness. Neither substitutes for the other.</li>
+          <li><strong>A good SDK is a translation layer.</strong> Its whole job is turning "write these bytes" into
+            leases, chunk math and retries the caller never has to think about.</li>
         </ol>
       </div>
-      <div class="callout">
-        Control plane answers “who holds the chunk?” · Data plane answers “here are the bytes.”
-        Failure detection keeps the map honest; replication keeps durability.
-      </div>
     </section>
 
-    <!-- 15 -->
     <section class="slide title-slide" data-title="Closing">
-      <div class="eyebrow">Further reading</div>
-      <h1>Continue exploring</h1>
-      <div class="two-col-list">
+      <div class="eyebrow">10 &middot; Repository</div>
+      <h1>Everything you saw is in the repo</h1>
+      <p class="lede">Every snippet in this talk was pulled directly from the source &mdash; clone it, break it, read
+        the tests, or open an issue.</p>
+      <a class="chip link" href="https://github.com/caleberi/hercules-dfs"
+        style="margin-top:.5rem; display:inline-block; font-size:1.05rem; padding:.6rem 1.1rem;">github.com/caleberi/hercules-dfs
+        &rarr;</a>
+      <div class="two-col-list" style="margin-top:1.4rem;">
         <li>Ghemawat et al., <em>The Google File System</em> (2003)</li>
-        <li>Hayashibara et al., <em>φ Accrual Failure Detection</em></li>
-        <li><code>docs/architecture/overview.md</code></li>
-        <li><code>docs/architecture/components.md</code></li>
-        <li><code>master_server/</code> · <code>chunkserver/</code> · <code>detector/</code></li>
-        <li><code>shared/rpc.go</code> · <code>common/constants.go</code></li>
+        <li>Hayashibara et al., <em>&Phi; Accrual Failure Detection</em></li>
+        <li>Arpit Bhayani, <a href="https://medium.com/@arpitbhayani/phi-%CF%86-accrual-failure-detection-79c21ce53a7a"
+            target="_blank" rel="noopener noreferrer"><em>&Phi; Accrual Failure Detection</em></a></li>
+        <li>Keshav, <em>How to Read a Paper</em></li>
+        <li><code>master_server/</code> &middot; <code>chunkserver/</code> &middot; <code>detector/</code></li>
+        <li><code>namespace_manager/</code> &middot; <code>hercules/</code> &middot; <code>gateway/</code></li>
+        <li><code>common/constants.go</code> &middot; <code>shared/rpc.go</code></li>
       </div>
-      <p class="note" style="margin-top:1.5rem">Open this file in a browser: <code>docs/slides/hercules-architecture.html</code></p>
+      <p class="note" style="margin-top:1.4rem">Caleb Erioluwa Adewole &middot; Gophers Nigeria Meetup</p>
     </section>
   </div>
 
+  <aside class="gopher" id="gopher" aria-hidden="true">
+    <div class="gopher-bob">
+      <svg viewBox="0 0 180 200" xmlns="http://www.w3.org/2000/svg">
+        <ellipse cx="42" cy="62" rx="18" ry="26" fill="#C48A58" transform="rotate(-22 42 62)" />
+        <ellipse cx="42" cy="64" rx="9" ry="14" fill="#E7B0C4" transform="rotate(-22 42 64)" />
+        <ellipse cx="138" cy="62" rx="18" ry="26" fill="#C48A58" transform="rotate(22 138 62)" />
+        <ellipse cx="138" cy="64" rx="9" ry="14" fill="#E7B0C4" transform="rotate(22 138 64)" />
+        <ellipse cx="90" cy="158" rx="58" ry="46" fill="#E2B17C" />
+        <ellipse cx="90" cy="168" rx="36" ry="30" fill="#F4E2C8" />
+        <circle cx="90" cy="92" r="58" fill="#E8BC8A" />
+        <ellipse cx="67" cy="86" rx="16" ry="18" fill="#fff" />
+        <ellipse cx="113" cy="86" rx="16" ry="18" fill="#fff" />
+        <circle cx="71" cy="90" r="7" fill="#1c2430" />
+        <circle cx="117" cy="90" r="7" fill="#1c2430" />
+        <circle cx="73.5" cy="87.5" r="2.3" fill="#fff" />
+        <circle cx="119.5" cy="87.5" r="2.3" fill="#fff" />
+        <ellipse cx="90" cy="116" rx="28" ry="20" fill="#F3D5BB" />
+        <ellipse cx="90" cy="108" rx="13" ry="10" fill="#E59A86" />
+        <rect x="82" y="122" width="8" height="11" rx="1.5" fill="#fff" />
+        <rect x="90" y="122" width="8" height="11" rx="1.5" fill="#fff" />
+        <ellipse cx="36" cy="150" rx="18" ry="11" fill="#E2B17C" />
+        <ellipse cx="144" cy="150" rx="18" ry="11" fill="#E2B17C" />
+      </svg>
+    </div>
+  </aside>
+
   <nav class="nav" aria-label="Slide navigation">
     <div class="nav-left">
-      <button id="prevBtn" type="button">← Prev</button>
+      <button id="prevBtn" type="button">&larr; Prev</button>
       <button id="tocBtn" type="button">Outline</button>
     </div>
     <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
     <div class="slide-count" id="slideCount">1 / 1</div>
     <div class="nav-right">
-      <button id="nextBtn" class="primary" type="button">Next →</button>
+      <button id="themeBtn" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Light theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="4"></circle>
+          <path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4">
+          </path>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4 7 7 0 0 0 20 14.5z"></path>
+        </svg>
+      </button>
+      <button id="nextBtn" class="primary" type="button">Next &rarr;</button>
     </div>
   </nav>
 
   <script>
+
     (function () {
       const slides = Array.from(document.querySelectorAll(".slide"));
       let index = 0;
-      let timers = [];
 
       const slideCount = document.getElementById("slideCount");
       const progressBar = document.getElementById("progressBar");
@@ -1043,189 +2466,345 @@
       const nextBtn = document.getElementById("nextBtn");
       const tocBtn = document.getElementById("tocBtn");
       const toc = document.getElementById("toc");
+      const themeBtn = document.getElementById("themeBtn");
+      const gopher = document.getElementById("gopher");
+      const gopherCorners = ["br", "bl", "tr", "tl"];
 
-      const clearTimers = () => {
-        timers.forEach(clearTimeout);
-        timers = [];
+      const applyTheme = (mode) => {
+        document.documentElement.setAttribute("data-theme", mode);
+        try { localStorage.setItem("hercules-slides-theme", mode); } catch (e) { }
+        if (themeBtn) {
+          const toLight = mode === "dark";
+          themeBtn.setAttribute("aria-label", toLight ? "Switch to light theme" : "Switch to dark theme");
+          themeBtn.title = toLight ? "Light theme" : "Dark theme";
+        }
+      };
+      let savedTheme = "dark";
+      try { savedTheme = localStorage.getItem("hercules-slides-theme") || "dark"; } catch (e) { }
+      applyTheme(savedTheme === "light" ? "light" : "dark");
+      if (themeBtn) {
+        themeBtn.addEventListener("click", () => {
+          applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+        });
+      }
+
+      const peekGopher = () => {
+        if (!gopher) return;
+        gopher.className = "gopher";
+        if (Math.random() < 0.38) return;
+        const corner = gopherCorners[(Math.random() * gopherCorners.length) | 0];
+        void gopher.offsetWidth;
+        gopher.classList.add("corner-" + corner, "is-in");
       };
 
       const show = (i) => {
-        clearTimers();
         index = (i + slides.length) % slides.length;
-        slides.forEach((s, n) => {
-          s.classList.toggle("active", n === index);
-        });
+        slides.forEach((s, n) => s.classList.toggle("active", n === index));
         slideCount.textContent = (index + 1) + " / " + slides.length;
         progressBar.style.width = ((index + 1) / slides.length * 100) + "%";
         prevBtn.disabled = index === 0;
-        nextBtn.textContent = index === slides.length - 1 ? "Restart" : "Next →";
-        document.title = slides[index].dataset.title + " · Hercules DFS";
+        nextBtn.textContent = index === slides.length - 1 ? "Restart" : "Next \u2192";
+        document.title = (slides[index].dataset.title || "Hercules DFS") + " \u00b7 Hercules DFS Talk";
+        peekGopher();
       };
 
       prevBtn.addEventListener("click", () => show(index - 1));
-      nextBtn.addEventListener("click", () => {
-        if (index === slides.length - 1) show(0);
-        else show(index + 1);
-      });
+      nextBtn.addEventListener("click", () => { if (index === slides.length - 1) show(0); else show(index + 1); });
       tocBtn.addEventListener("click", () => show(1));
 
       document.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+        const tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT") return;
+        if (e.key === "ArrowRight" || e.key === "PageDown") {
           e.preventDefault();
-          if (index === slides.length - 1) show(0);
-          else show(index + 1);
-        } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
-          e.preventDefault();
-          show(index - 1);
-        } else if (e.key === "Home") {
-          show(0);
-        } else if (e.key === "End") {
-          show(slides.length - 1);
-        } else if (e.key.toLowerCase() === "t") {
-          show(1);
+          if (index === slides.length - 1) show(0); else show(index + 1);
+        } else if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); show(index - 1); }
+        else if (e.key === "Home") show(0);
+        else if (e.key === "End") show(slides.length - 1);
+        else if (e.key.toLowerCase() === "t") show(1);
+        else if (e.key.toLowerCase() === "d") {
+          applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
         }
       });
 
-      // Build outline
-      slides.forEach((s, n) => {
-        if (n === 0) return;
+      const roadmapGroups = [
+        { mile: "Source", jump: 2, up: [{ i: 2, t: "The paper" }], down: [{ i: 3, t: "Reading the paper" }] },
+        { mile: "Language", jump: 4, up: [{ i: 4, t: "Why Go?" }], down: [] },
+        { mile: "Servers", jump: 5, up: [{ i: 5, t: "Master server" }], down: [{ i: 6, t: "Chunk server" }] },
+        { mile: "Resilience", jump: 7, up: [{ i: 7, t: "Locking & Leasing" }], down: [{ i: 8, t: "Failure detection" }, { i: 9, t: "Data integrity" }] },
+        { mile: "Ship it", jump: 10, up: [{ i: 10, t: "Client SDK" }, { i: 11, t: "Field notes" }], down: [{ i: 12, t: "Summary" }, { i: 13, t: "Closing" }] }
+      ];
+
+      const makeNode = (item) => {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.innerHTML = "<span>Slide " + String(n + 1).padStart(2, "0") + "</span>" + (s.dataset.title || "");
-        btn.addEventListener("click", () => show(n));
-        toc.appendChild(btn);
+        btn.className = "rm-node";
+        btn.innerHTML = "<span>Slide " + String(item.i + 1).padStart(2, "0") + "</span>" + item.t;
+        btn.addEventListener("click", () => show(item.i));
+        return btn;
+      };
+
+      roadmapGroups.forEach((group) => {
+        const col = document.createElement("div");
+        col.className = "rm-col";
+        if (group.up.length) col.classList.add("has-up");
+        if (group.down.length) col.classList.add("has-down");
+
+        const up = document.createElement("div");
+        up.className = "rm-up";
+        group.up.forEach((item) => up.appendChild(makeNode(item)));
+
+        const mile = document.createElement("button");
+        mile.type = "button";
+        mile.className = "rm-mile";
+        mile.textContent = group.mile;
+        mile.addEventListener("click", () => show(group.jump));
+
+        const down = document.createElement("div");
+        down.className = "rm-down";
+        group.down.forEach((item) => down.appendChild(makeNode(item)));
+
+        col.appendChild(up);
+        col.appendChild(mile);
+        col.appendChild(down);
+        toc.appendChild(col);
       });
 
-      // Architecture detail
-      const archCopy = {
-        client: {
-          title: "Gateway / Client SDK",
-          body: "External entry. HTTP gateway wraps HerculesClient. All metadata RPCs go to the master; data RPCs go to chunkservers."
-        },
-        master: {
-          title: "Master Server",
-          body: "Single metadata authority. Owns namespace, chunk→server map, leases, garbage lists, and re-replication decisions. Default port 9090."
-        },
-        chunk: {
-          title: "Chunkserver",
-          body: "Stores chunk-{handle}.chk files (≤ 64 MB). Serves reads/writes, heartbeats every 5 s, and participates in snapshot re-replication."
+      const GO_KW = new Set(["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"]);
+      const GO_BUILTIN = new Set(["append", "cap", "clear", "close", "complex", "copy", "delete", "imag", "len", "make", "max", "min", "new", "panic", "print", "println", "real", "recover"]);
+      const GO_TYPE = new Set(["any", "bool", "byte", "comparable", "complex64", "complex128", "error", "float32", "float64", "int", "int8", "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"]);
+      const GO_CONST = new Set(["true", "false", "iota", "nil"]);
+      const GO_TWO = new Set(["==", "!=", "<=", ">=", "&&", "||", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "++", "--", "<-", "&^"]);
+      const GO_THREE = new Set(["<<=", ">>=", "&^=", "..."]);
+
+      const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      const tokenizeGo = (src) => {
+        const tokens = [];
+        let i = 0;
+        const n = src.length;
+        while (i < n) {
+          const c = src[i];
+          if (c === " " || c === "\t" || c === "\n" || c === "\r") {
+            let j = i + 1;
+            while (j < n && " \t\n\r".indexOf(src[j]) !== -1) j++;
+            tokens.push({ type: "ws", value: src.slice(i, j) });
+            i = j;
+            continue;
+          }
+          if (c === "/" && src[i + 1] === "/") {
+            let j = i + 2;
+            while (j < n && src[j] !== "\n") j++;
+            tokens.push({ type: "cmt", value: src.slice(i, j) });
+            i = j;
+            continue;
+          }
+          if (c === "/" && src[i + 1] === "*") {
+            let j = i + 2;
+            while (j < n - 1 && !(src[j] === "*" && src[j + 1] === "/")) j++;
+            j = Math.min(n, j + 2);
+            tokens.push({ type: "cmt", value: src.slice(i, j) });
+            i = j;
+            continue;
+          }
+          if (c === "`") {
+            let j = i + 1;
+            while (j < n && src[j] !== "`") j++;
+            tokens.push({ type: "str", value: src.slice(i, Math.min(n, j + 1)) });
+            i = Math.min(n, j + 1);
+            continue;
+          }
+          if (c === '"') {
+            let j = i + 1;
+            while (j < n && src[j] !== '"') {
+              j += src[j] === "\\" ? 2 : 1;
+            }
+            tokens.push({ type: "str", value: src.slice(i, Math.min(n, j + 1)) });
+            i = Math.min(n, j + 1);
+            continue;
+          }
+          if (c === "'") {
+            let j = i + 1;
+            while (j < n && src[j] !== "'") {
+              j += src[j] === "\\" ? 2 : 1;
+            }
+            tokens.push({ type: "str", value: src.slice(i, Math.min(n, j + 1)) });
+            i = Math.min(n, j + 1);
+            continue;
+          }
+          if (/\d/.test(c) || (c === "." && /\d/.test(src[i + 1] || ""))) {
+            let j = i;
+            if (src[j] === "0" && /[xobXOB]/.test(src[j + 1] || "")) j += 2;
+            while (j < n && /[\da-fA-F.xXeEoOpP_]/.test(src[j])) j++;
+            tokens.push({ type: "num", value: src.slice(i, j) });
+            i = j;
+            continue;
+          }
+          if (/[A-Za-z_]/.test(c)) {
+            let j = i + 1;
+            while (j < n && /[A-Za-z0-9_]/.test(src[j])) j++;
+            tokens.push({ type: "ident", value: src.slice(i, j) });
+            i = j;
+            continue;
+          }
+          const three = src.slice(i, i + 3);
+          if (GO_THREE.has(three)) {
+            tokens.push({ type: "op", value: three });
+            i += 3;
+            continue;
+          }
+          const two = src.slice(i, i + 2);
+          if (GO_TWO.has(two)) {
+            tokens.push({ type: "op", value: two });
+            i += 2;
+            continue;
+          }
+          if ("+-*/%=!<>&|^~".indexOf(c) !== -1) {
+            tokens.push({ type: "op", value: c });
+            i += 1;
+            continue;
+          }
+          tokens.push({ type: "punc", value: c });
+          i += 1;
+        }
+        return tokens;
+      };
+
+      const significant = (tokens, idx, dir) => {
+        for (let k = idx + dir; k >= 0 && k < tokens.length; k += dir) {
+          if (tokens[k].type !== "ws") return tokens[k];
+        }
+        return null;
+      };
+
+      const classifyIdents = (tokens) => {
+        for (let i = 0; i < tokens.length; i++) {
+          const t = tokens[i];
+          if (t.type !== "ident") continue;
+          if (GO_KW.has(t.value)) { t.type = "kw"; continue; }
+          if (GO_CONST.has(t.value)) { t.type = "const"; continue; }
+          if (GO_TYPE.has(t.value)) { t.type = "type"; continue; }
+          const next = significant(tokens, i, 1);
+          const prev = significant(tokens, i, -1);
+          if (GO_BUILTIN.has(t.value) && next && next.value === "(") {
+            t.type = "builtin";
+            continue;
+          }
+          if (next && next.value === "." && /^[a-z][a-z0-9_]*$/.test(t.value) && (t.value.length > 2 || t.value === "os" || t.value === "io")) {
+            t.type = "pkg";
+            continue;
+          }
+          if (next && next.value === "(") {
+            t.type = "fn";
+            continue;
+          }
+          if (prev && prev.value === "." && /^[A-Z]/.test(t.value)) {
+            t.type = "type";
+            continue;
+          }
+          if (prev && prev.value === ".") {
+            t.type = "prop";
+            continue;
+          }
+          if (/^[A-Z]/.test(t.value)) t.type = "type";
         }
       };
 
-      const archDetail = document.getElementById("archDetail");
-      document.querySelectorAll("#archDiagram .node").forEach((node) => {
-        const activate = () => {
-          document.querySelectorAll("#archDiagram .node").forEach((n) => n.classList.remove("active"));
-          node.classList.add("active");
-          const info = archCopy[node.dataset.role];
-          archDetail.innerHTML = "<h3>" + info.title + "</h3><p class='muted'>" + info.body + "</p>";
+      const renderHighlighted = (src) => {
+        const tokens = tokenizeGo(src.replace(/\r\n/g, "\n"));
+        classifyIdents(tokens);
+        let html = "";
+        let line = 1;
+        let lineHtml = "";
+        const flush = () => {
+          html += '<span class="cl"><span class="ln">' + line + '</span><span class="lc">' + (lineHtml || " ") + "</span></span>";
+          line += 1;
+          lineHtml = "";
         };
-        node.addEventListener("click", activate);
-        node.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
+        const emit = (type, value) => {
+          const parts = value.split("\n");
+          for (let p = 0; p < parts.length; p++) {
+            if (p > 0) flush();
+            const part = parts[p];
+            if (!part) continue;
+            if (type === "ws" || type === "ident" || type === "punc") lineHtml += escapeHtml(part);
+            else lineHtml += '<span class="tok-' + type + '">' + escapeHtml(part) + "</span>";
+          }
+        };
+        tokens.forEach((t) => emit(t.type, t.value));
+        if (lineHtml.length || line === 1) flush();
+        return html;
+      };
+
+      document.querySelectorAll(".code-block").forEach((block) => {
+        const host = block.querySelector("code") || block;
+        host.innerHTML = renderHighlighted(host.textContent.replace(/^\n/, "").replace(/\n+$/, "\n"));
+      });
+
+      document.querySelectorAll(".code-wrap").forEach((wrap) => {
+        const tabs = wrap.querySelectorAll(".code-tab");
+        const view = wrap.querySelector(".code-view");
+        const chrome = document.createElement("div");
+        chrome.className = "code-chrome";
+        chrome.innerHTML = '<span class="code-dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="code-file"></span><span class="code-lang">Go</span>';
+        view.prepend(chrome);
+        const fileEl = chrome.querySelector(".code-file");
+        const syncFile = () => {
+          const active = wrap.querySelector(".code-tab.active");
+          const src = active && active.querySelector(".src");
+          fileEl.textContent = src ? src.textContent.trim() : "snippet.go";
+        };
+        syncFile();
+        view.classList.add("is-ready");
+        tabs.forEach((tab) => {
+          tab.addEventListener("click", () => {
+            tabs.forEach((t) => t.classList.remove("active"));
+            tab.classList.add("active");
+            const target = tab.dataset.target;
+            view.querySelectorAll(".code-block").forEach((b) => {
+              b.classList.toggle("active", b.id === target);
+            });
+            syncFile();
+          });
         });
       });
 
-      // Component cards
-      const compCopy = {
-        master: "Central coordinator. In-memory metadata, persisted periodically. Chooses replica sets and lease holders.",
-        chunk: "Data plane worker. Local filesystem storage, mutation application, checksum maintenance, GC of garbage handles.",
-        gateway: "Gin HTTP server. Routes REST to HerculesClient methods — never owns storage itself.",
-        detector: "φ Accrual over Redis. Tracks inter-arrival times; Predict() yields suspicion level for logging.",
-        namespace: "Tree of directories/files. Soft-delete renames with ___deleted__ prefix until garbage collection.",
-        buffer: "Temporary map BufferId → bytes. Decouples data push from mutation commit in the write protocol."
-      };
-      const titles = {
-        master: "Master Server", chunk: "Chunkserver", gateway: "Gateway",
-        detector: "Failure Detector", namespace: "Namespace Manager", buffer: "Download Buffer"
-      };
-      const compDetail = document.getElementById("compDetail");
-      document.querySelectorAll("[data-comp]").forEach((card) => {
-        card.addEventListener("click", () => {
-          document.querySelectorAll("[data-comp]").forEach((c) => c.classList.remove("selected"));
-          card.classList.add("selected");
-          const k = card.dataset.comp;
-          compDetail.innerHTML = "<h3>" + titles[k] + "</h3><p class='muted'>" + compCopy[k] + "</p>";
-        });
-      });
-
-      // Generic step animator
-      const animateSteps = (selector, delay) => {
-        clearTimers();
-        const items = Array.from(document.querySelectorAll(selector));
-        items.forEach((el) => el.classList.remove("on"));
-        items.forEach((el, i) => {
-          timers.push(setTimeout(() => el.classList.add("on"), i * delay));
-        });
-      };
-
-      const resetSteps = (selector) => {
-        clearTimers();
-        document.querySelectorAll(selector).forEach((el) => el.classList.remove("on"));
-      };
-
-      document.getElementById("bootPlay").addEventListener("click", () => animateSteps("#bootFlow .card", 450));
-      document.getElementById("bootReset").addEventListener("click", () => resetSteps("#bootFlow .card"));
-
-      document.getElementById("rpcPlay").addEventListener("click", () => animateSteps("#rpcSeq .line", 400));
-      document.getElementById("rpcReset").addEventListener("click", () => resetSteps("#rpcSeq .line"));
-
-      document.getElementById("regPlay").addEventListener("click", () => animateSteps("#regSteps .step", 550));
-      document.getElementById("regReset").addEventListener("click", () => resetSteps("#regSteps .step"));
-
-      document.getElementById("writePlay").addEventListener("click", () => {
-        animateSteps("#writeSteps .step", 500);
-        animateSteps("#writeSeq .line", 500);
-      });
-      document.getElementById("writeReset").addEventListener("click", () => {
-        resetSteps("#writeSteps .step");
-        resetSteps("#writeSeq .line");
-      });
-
-      document.getElementById("repPlay").addEventListener("click", () => animateSteps("#repSteps .step", 550));
-      document.getElementById("repReset").addEventListener("click", () => resetSteps("#repSteps .step"));
-
-      // φ demo — approximate with fixed μ, σ for teaching
-      const mu = 1000; // ms mean inter-arrival
-      const sigma = 200;
+      // phi demo
+      const mu = 1000, sigma = 200;
       const slider = document.getElementById("delaySlider");
-      const phiValue = document.getElementById("phiValue");
-      const phiBar = document.getElementById("phiBar");
-      const phiBadge = document.getElementById("phiBadge");
+      if (slider) {
+        const phiValue = document.getElementById("phiValue");
+        const phiBar = document.getElementById("phiBar");
+        const phiBadge = document.getElementById("phiBadge");
 
-      const erf = (x) => {
-        const sign = x < 0 ? -1 : 1;
-        x = Math.abs(x);
-        const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
-        const t = 1 / (1 + p * x);
-        const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-        return sign * y;
-      };
+        const erf = (x) => {
+          const sign = x < 0 ? -1 : 1; x = Math.abs(x);
+          const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+          const t = 1 / (1 + p * x);
+          const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+          return sign * y;
+        };
 
-      const updatePhi = () => {
-        const t = Number(slider.value);
-        const z = (t - mu) / sigma;
-        const cdf = 0.5 * (1 + erf(z / Math.SQRT2));
-        let phi = cdf >= 1 ? 20 : -Math.log10(Math.max(1e-15, 1 - cdf));
-        if (!isFinite(phi)) phi = 20;
-        phiValue.textContent = "φ ≈ " + phi.toFixed(2);
-        phiBar.style.width = Math.min(100, (phi / 10) * 100) + "%";
-        if (phi < 1) {
-          phiBadge.className = "badge ok";
-          phiBadge.textContent = "Healthy";
-        } else if (phi < 8) {
-          phiBadge.className = "badge warn";
-          phiBadge.textContent = "Warning";
-        } else {
-          phiBadge.className = "badge alert";
-          phiBadge.textContent = "Likely failed";
-        }
-      };
-      slider.addEventListener("input", updatePhi);
-      updatePhi();
+        const updatePhi = () => {
+          const t = Number(slider.value);
+          const z = (t - mu) / sigma;
+          const cdf = 0.5 * (1 + erf(z / Math.SQRT2));
+          let phi = cdf >= 1 ? 20 : -Math.log10(Math.max(1e-15, 1 - cdf));
+          if (!isFinite(phi)) phi = 20;
+          phiValue.textContent = "\u03c6 \u2248 " + phi.toFixed(2);
+          phiBar.style.width = Math.min(100, (phi / 10) * 100) + "%";
+          if (phi < 1) { phiBadge.style.background = "var(--accent-soft)"; phiBadge.style.color = "var(--accent)"; phiBadge.textContent = "Healthy"; }
+          else if (phi < 8) { phiBadge.style.background = "var(--warn-soft)"; phiBadge.style.color = "var(--warn)"; phiBadge.textContent = "Warning"; }
+          else { phiBadge.style.background = "var(--alert-soft)"; phiBadge.style.color = "var(--alert)"; phiBadge.textContent = "Likely failed"; }
+        };
+        slider.addEventListener("input", updatePhi);
+        updatePhi();
+      }
 
       show(0);
     })();
+
   </script>
 </body>
+
 </html>
