@@ -12,6 +12,7 @@ Welcome to the Hercules Distributed File System documentation! This guide provid
 ### 🏗️ Architecture
 - [System Overview](architecture/overview.md)
 - [Component Details](architecture/components.md)
+- [Interactive Architecture Slides](slides/hercules-architecture.html) — TCP → delegation → failure detection
 - [Data Flow](architecture/data-flow.md)
 - [Failure Detection](architecture/failure-detection.md)
 - [Replication Strategy](architecture/replication.md)
